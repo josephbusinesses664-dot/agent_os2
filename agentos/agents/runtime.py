@@ -435,7 +435,9 @@ class AgentRuntime:
         executed = set()
         for _ in range(3):
             try:
-                response = await self._call_with_failover(model_id, system, messages, task)
+                # no tools offered: the model MUST answer in text now
+                response = await self._call_with_failover(model_id, system, messages,
+                                                          task, allow_tools=False)
             except Exception as exc:  # noqa: BLE001
                 return f"_(finish attempt failed: {exc})_"
             calls = parse_tool_calls(response)
@@ -530,9 +532,12 @@ class AgentRuntime:
             pass
 
     async def _call_with_failover(self, model_id: str, system: str,
-                                  messages: list[dict], task: Task) -> ModelResponse:
+                                  messages: list[dict], task: Task,
+                                  allow_tools: bool = True) -> ModelResponse:
         ctx = self.ctx
         request = await self._make_request(model_id, system, messages, task)
+        if not allow_tools:
+            request.tools = []  # force a plain-text answer
         current = model_id
         used: set[str] = set()
         for attempt in range(3):

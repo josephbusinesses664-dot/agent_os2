@@ -357,10 +357,16 @@ class OrchestratorEngine:
                     target.write_text(html)
                 except Exception:  # noqa: BLE001
                     logger.exception("failed to persist %s", filename)
-            elif result.status == "completed":
-                result.status = "failed"
-                result.error = (f"stage {stage.stage_id} completed without the "
-                                f"{filename} deliverable in its final answer")
+            else:
+                # the model may have written the file directly instead —
+                # a real deliverable on disk satisfies the contract
+                on_disk = self.svc.workspace / project.project_id / filename
+                if on_disk.exists() and on_disk.stat().st_size > 2000:
+                    result.artifacts.append(filename)
+                elif result.status == "completed":
+                    result.status = "failed"
+                    result.error = (f"stage {stage.stage_id} completed without the "
+                                    f"{filename} deliverable (answer or file)")
 
         # mirror the agent's full response into its branch channel so the
         # humans can read the actual work (PRDs, briefs, reports, arguments)
