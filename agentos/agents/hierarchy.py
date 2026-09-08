@@ -66,9 +66,12 @@ def _agent(
     perms.update(extra_permissions or {})
     # execs (executive office + department directors) think with deepseek-pro;
     # every specialist below them works on deepseek-flash
-    # build stages emit whole pages (10-35KB) — flash caps at ~1-2K words
-    _BUILD_IDS = {"frontend-lead", "backend-lead"}
-    preferred = ("deepseek-pro" if agent_id in _EXEC_IDS or agent_id in _BUILD_IDS
+    # deliverable-heavy + evidence-critical stages need pro's output depth;
+    # flash caps at ~1-2K words and kept failing the substantive-output gate
+    _PRO_IDS = {"frontend-lead", "backend-lead", "research-director",
+                "market-researcher", "community-researcher", "competitor-analyst",
+                "technical-researcher", "product-researcher", "requirements-analyst"}
+    preferred = ("deepseek-pro" if agent_id in _EXEC_IDS or agent_id in _PRO_IDS
                  else "deepseek-flash")
     return AgentDef(
         id=agent_id,
