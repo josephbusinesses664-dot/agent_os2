@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     model_circuit_threshold: int = 3  # consecutive failures before a model's circuit opens
     model_circuit_cooldown_seconds: float = 120.0  # how long an open circuit stays open
 
+    # --- Concurrency (§34) ---------------------------------------------------
+    lock_ttl_seconds: float = 120.0  # default distributed-lock TTL (task locks)
+
     # --- Operations ---------------------------------------------------------
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

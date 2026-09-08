@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -739,8 +740,17 @@ class OrchestratorEngine:
 
     # -- worker loop --------------------------------------------------------
     async def worker_loop(self, stop_event: Optional[asyncio.Event] = None) -> None:
-        """Consume the task queue and run tasks (with graceful shutdown)."""
+        """Consume the task queue and run tasks (with graceful shutdown).
+
+        Concurrency guard (§34): before executing a task the worker takes a
+        distributed lock (`task:<id>:exec`) so two workers on different
+        processes/containers can never run the same task simultaneously. The
+        DB-status check below is a second, cheaper guard; the lock is the
+        arbiter across processes. A task left enqueued after its owner dies
+        (lock TTL expiry) is simply picked up by the next worker.
+        """
         logger.info("worker started")
+        owner = f"worker:{os.getpid()}"
         while True:
             if stop_event and stop_event.is_set():
                 break
@@ -759,13 +769,22 @@ class OrchestratorEngine:
                 logger.info("skipping duplicate queued task %s (status %s)",
                             task_id, task.status.value)
                 continue
+            # distributed mutual exclusion: another worker owns it? skip.
+            lock_key = f"task:{task_id}:exec"
+            if not await self.svc.locks.acquire(lock_key, owner=owner):
+                logger.info("task %s already locked by another worker — skipping",
+                            task_id)
+                continue
             try:
                 await self.run_single_task(task_id)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("task %s failed in worker", task_id)
                 task = await self.svc.tasks.get(task_id)
                 if task:
-                    await self.svc.tasks.set_status(task_id, TaskStatus.FAILED, error=str(exc))
+                    await self.svc.tasks.set_status(task_id, TaskStatus.FAILED,
+                                                    error=str(exc))
+            finally:
+                await self.svc.locks.release(lock_key, owner)
         logger.info("worker stopped")
 
 

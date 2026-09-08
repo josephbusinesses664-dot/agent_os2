@@ -85,6 +85,7 @@ class Services:
 
     mattermost: Any = None
     web_search: Any = None
+    locks: Any = None  # LockManager — distributed mutexes (Redis or in-process)
 
     workspace: Path = None  # type: ignore[assignment]
     graph: Any = None
@@ -92,10 +93,16 @@ class Services:
 
     def __post_init__(self) -> None:
         if self.settings.database_url:
-            self.store = PostgresRepository(self.settings.database_url)
+            from agentos.db.relational import RelationalRepository
+
+            self.store = RelationalRepository(self.settings.database_url)
         else:
             self.store = MemoryRepository()
         self.entity_store = EntityStore(self.store)
+        from agentos.db.locks import LockManager
+
+        self.locks = LockManager(redis_url=self.settings.redis_url,
+                                 default_ttl=self.settings.lock_ttl_seconds)
         if self.settings.redis_url:
             self.kv = RedisKV(self.settings.redis_url)
             self.queue = RedisQueue(self.settings.redis_url)
@@ -181,12 +188,13 @@ class Services:
         return counts
 
     async def init_db(self) -> None:
-        if isinstance(self.store, PostgresRepository):
+        if hasattr(self.store, "init"):
             await self.store.init()
 
     async def close(self) -> None:
-        if isinstance(self.store, PostgresRepository):
+        if hasattr(self.store, "close"):
             await self.store.close()
+        await self.locks.close()
 
     # -- runtime context for one agent run ---------------------------------
     @property

@@ -25,6 +25,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "aiosqlite>=0.20",   # offline tests for the relational Postgres schema
+    "fakeredis>=2.20",   # offline tests for the Redis-backed locks
+    "lupa>=2.0",         # Lua eval for fakeredis script support
 ]
 
 [project.scripts]

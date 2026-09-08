@@ -185,11 +185,24 @@ breaker (`agentos/models/router.py`): `MODEL_CIRCUIT_THRESHOLD` consecutive
 failures open a model's circuit and the router routes around it until the
 cooldown expires.
 
+Relational database: when `DATABASE_URL` is set, every aggregate (agents,
+projects, tasks, approvals, events, audit, memory, workspaces, …) lives in
+its own table with a typed primary key and **real foreign keys** enforced by
+Postgres — a task referencing a nonexistent project is rejected by the
+database, and legacy `agentos_docs` rows migrate automatically on startup.
+See [DATABASE.md](docs/DATABASE.md).
+
+Concurrency: workers take distributed locks (`task:<id>:exec`) against Redis
+before executing a task, so two workers can never run the same task at once
+— even across containers. In-process locks keep the same guarantees in
+offline/tests. `LOCK_TTL_SECONDS` controls the TTL.
+
 ## Documentation
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design and data flow
 - [INSTALLATION.md](docs/INSTALLATION.md) — local, Docker, and production notes
 - [CONFIGURATION.md](docs/CONFIGURATION.md) — every env var explained
+- [DATABASE.md](docs/DATABASE.md) — the relational Postgres schema and distributed locks
 - [AGENTS.md](docs/AGENTS.md) — the org chart, permissions, spawning
 - [SKILLS.md](docs/SKILLS.md) — skill architecture and progressive disclosure
 - [MCP.md](docs/MCP.md) — MCP servers, registry, permissions

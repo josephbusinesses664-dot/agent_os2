@@ -8,8 +8,9 @@ variable; this page explains the important ones.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | *(empty → in-memory)* | `postgresql+asyncpg://user:pass@host:5432/db`. Persistent store for all aggregates. |
-| `REDIS_URL` | *(empty → in-memory)* | `redis://host:6379/0`. Task queue, counters, cache. |
+| `DATABASE_URL` | *(empty → in-memory)* | `postgresql+asyncpg://user:pass@host:5432/db`. Persistent store for all aggregates. **Relational schema**: each aggregate (agents, projects, tasks, approvals, events, audit, memory, workspaces, …) lives in its own table with a typed primary key and real foreign keys — a task referencing a nonexistent project is rejected by the database. Legacy `agentos_docs` rows migrate automatically on startup. See [DATABASE.md](DATABASE.md). |
+| `REDIS_URL` | *(empty → in-memory)* | `redis://host:6379/0`. Task queue, counters, cache, **distributed locks**. |
+| `LOCK_TTL_SECONDS` | `120` | TTL for distributed locks — `task:<id>:exec` is held by one worker while it runs a task, so two workers can never execute the same task at once even across containers/processes. |
 | `WORKSPACE_DIR` | `./workspace` | Sandboxed file area for agents; path escapes are blocked and every write is audit-logged. |
 | `WORKSPACE_ISOLATION` | `false` | When true, coding stages (`implement-frontend`, `implement-backend`, `testing`, `security`, `review`) execute in their own **git worktree** cut from the project workspace; the work merges back when the stage finishes. Plain-dir projects are synced back instead. |
 
