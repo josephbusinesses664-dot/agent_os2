@@ -46,6 +46,17 @@ _STRIP_NUDGE_RE = re.compile(
     r"\[?(?:STOP using tools|Your tool calls were identical)[^\]]*\]?", re.DOTALL)
 
 
+def _json_safe(obj: Any) -> str:
+    """Serialize anything to a compact string — datetimes, enums, models,
+    bytes — so a malformed/rich tool result can never crash the run loop
+    (a model calling project.state gets datetimes back; json.dumps would
+    raise, killing the whole task)."""
+    try:
+        return json.dumps(obj, default=str)[:4000]
+    except Exception:  # noqa: BLE001
+        return f"(unserializable result: {type(obj).__name__})"
+
+
 def clean_content(text: str) -> str:
     """Strip raw tool-call XML and loop-nudge echoes from agent text so
     Mattermost/tasks only ever see the agent's actual words."""
@@ -472,7 +483,7 @@ class AgentRuntime:
                             result.artifacts.append(path)
                 messages.append({
                     "role": "user",
-                    "content": f"[tool result for {tool_name}]\n{json.dumps(tool_result)[:4000]}",
+                    "content": f"[tool result for {tool_name}]\n{_json_safe(tool_result)}",
                 })
                 self._compact_context(messages)
                 if tool_result.get("pending_approval"):
@@ -553,7 +564,7 @@ class AgentRuntime:
                 result.tool_results.append({**tool_result, "tool": tool_name})
                 messages.append({
                     "role": "user",
-                    "content": f"[tool result for {tool_name}]\n{_json.dumps(tool_result)[:4000]}",
+                    "content": f"[tool result for {tool_name}]\n{_json_safe(tool_result)}",
                 })
         return clean_content(response.content or "")
 
@@ -763,7 +774,7 @@ class AgentRuntime:
 
     def _extract_artifacts(self, tool_result: dict) -> list[str]:
         paths: list[str] = []
-        raw = json.dumps(tool_result)
+        raw = _json_safe(tool_result)
         for m in re.finditer(r"\"?path\"?\s*:\s*\"([^\"]+)\"", raw):
             p = m.group(1)
             if p.startswith(("workspace", "artifacts", "./", "/")) or "." in p:

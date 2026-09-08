@@ -160,7 +160,7 @@ class ToolExecutor:
                     project_id=ctx.project.project_id if ctx.project else None,
                     risk_level=forced_approval.approval_risk if forced_approval else "high",
                     reason=(f"{agent.name} wants to call {tool_name} with args "
-                            f"{json.dumps(redact_args(args))[:300]}"
+                            f"{json.dumps(redact_args(args), default=str)[:300]}"
                             + (f" — {forced_approval.reason}" if forced_approval else "")),
                 )
                 await self._audit(ctx, agent, tool_name, "tool.approval_requested", "pending",
@@ -219,7 +219,7 @@ class ToolExecutor:
             span.status = "ok" if result.get("ok") else "error"
             span.error = result.get("error")
             span.cost = float(tool.config.get("cost_per_call", 0) or 0)
-            span.result_summary = json.dumps(result)[:300]
+            span.result_summary = json.dumps(result, default=str)[:300]
             await span_ctx.__aexit__(None, None, None)
 
         # capability post-hooks + validators

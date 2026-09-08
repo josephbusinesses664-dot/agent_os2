@@ -82,6 +82,33 @@ async def test_verifying_state_used_during_run(svc):
     assert any(p["to"] == "verifying" for p in transitions), transitions
 
 
+@pytest.mark.asyncio
+async def test_datetime_tool_result_does_not_crash_run(svc):
+    """A tool result containing datetimes (e.g. project.state returns
+    model_dump() with created_at) must serialize safely — the live benchmark
+    crashed whole runs with 'Object of type datetime is not JSON serializable'
+    when the model called project.state."""
+    from agentos.agents.runtime import _json_safe
+
+    import datetime
+
+    payload = {"ok": True, "project": {"name": "P", "created_at": datetime.datetime.now()}}
+    dumped = _json_safe(payload)
+    assert "created_at" in dumped
+    assert "2026" in dumped or "2025" in dumped
+
+    # and through the full run: project.state is allowed + returns datetimes;
+    # the run must not crash
+    agent = await svc.agent_registry.get("product-manager")
+    project = await svc.projects.create("P", "x")
+    task = Task(task_id="t-dt", project_id=project.project_id, title="Research",
+                description="PLANNED_TOOL_CALLS: [{\"tool\": \"project.state\", \"args\": {}}]")
+    run = svc.runtime(agent, task, project)
+    outcome = await run.run(task)
+    assert outcome.error is None or "serializable" not in (outcome.error or "")
+    assert "serializable" not in (outcome.error or "")
+
+
 def test_context_compaction_trims_old_tool_results():
     """Long tool sessions must be condensed, not dumped wholesale into the
     next model call (§19 context budget)."""
