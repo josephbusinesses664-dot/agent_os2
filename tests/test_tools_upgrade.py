@@ -237,6 +237,28 @@ async def test_circuit_breaker_opens_and_fails_fast(svc, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_file_tools_handle_directory_targets(svc):
+    """file.patch and json.query on a directory must return a structured
+    error, never crash the run with IsADirectoryError (seen live in the
+    benchmark when a model passed a workspace dir as the target)."""
+    agent = await svc.agent_registry.get("executive")
+    project = await svc.projects.create("dir-target", "t")
+    task = await svc.tasks.create(project.project_id, "t", "d")
+    ctx = svc.runtime(agent, task, project).ctx
+    ctx.workspace.mkdir(parents=True, exist_ok=True)
+    (ctx.workspace / "subdir").mkdir(exist_ok=True)
+
+    r = await svc.executor.execute(ctx, agent, "file.patch",
+                                   {"path": "subdir", "patch": "@@ -1 +1 @@"})
+    assert not r["ok"]
+    assert "directory" in r["error"]
+
+    r = await svc.executor.execute(ctx, agent, "json.query", {"path": "subdir"})
+    assert not r["ok"]
+    assert "directory" in r["error"]
+
+
+@pytest.mark.asyncio
 async def test_circuit_breaker_recovers_on_success(svc, monkeypatch):
     """A successful call resets the circuit (closed) and clears the failure
     count — a transiently broken tool recovers without intervention."""

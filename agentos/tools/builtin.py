@@ -534,6 +534,8 @@ async def _h_file_patch(ctx: Any, args: dict) -> dict:
     target = _path_inside(ctx.workspace, rel)
     if not target.exists():
         return {"ok": False, "error": f"{target} does not exist"}
+    if target.is_dir():
+        return {"ok": False, "error": f"{target} is a directory, not a file"}
     patch = str(args.get("patch") or "")
     if not patch:
         return {"ok": False, "error": "file.patch requires a 'patch' argument"}
@@ -603,6 +605,8 @@ async def _h_json_query(ctx: Any, args: dict) -> dict:
     target = _path_inside(ctx.workspace, rel)
     if not target.exists():
         return {"ok": False, "error": f"{target} does not exist"}
+    if target.is_dir():
+        return {"ok": False, "error": f"{target} is a directory, not a file"}
     try:
         data = json.loads(target.read_text(errors="replace"))
     except json.JSONDecodeError as exc:
@@ -1131,7 +1135,7 @@ BUILTIN_TOOLS: list[ToolDef] = [
             config={"parameters": {"path": {"type": "string", "description": "File to patch"}, "patch": {"type": "string", "description": "Unified diff text"}}, "required": ["path", "patch"]}, category="capability"),
     ToolDef(name="json.query", description="Query a JSON file in the workspace with a dotted path.",
             permission_key="json.query", risk_level="low",
-            config={"parameters": {"path": {"type": "string", "description": "JSON file path"}, "path_expr": {"type": "string", "description": "Dotted path expression"}}, "required": ["path", "path_expr"]}, category="capability"),
+            config={"parameters": {"path": {"type": "string", "description": "JSON file path"}, "path_expr": {"type": "string", "description": "Dotted path expression (defaults to the whole document)"}}, "required": ["path"]}, category="capability"),
     ToolDef(name="web.scrape", description="Fetch a URL and extract visible text (network).",
             permission_key="web.scrape", risk_level="medium",
             config={"parameters": {"url": {"type": "string", "description": "http(s) URL to fetch"}}, "required": ["url"]}, category="capability"),
