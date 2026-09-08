@@ -102,7 +102,7 @@ class BenchmarkRunner:
         try:
             outcome = await self.svc.engine.run_single_task(task.task_id)
         except Exception as exc:  # noqa: BLE001
-            from agentos.domain.models import AgentRunResult
+            from agentos.agents.runtime import AgentRunResult
 
             outcome = AgentRunResult(error=f"run crashed: {exc}")
             await self.svc.tasks.set_status(task.task_id, TaskStatus.FAILED,

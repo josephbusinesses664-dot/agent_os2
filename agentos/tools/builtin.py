@@ -215,7 +215,10 @@ async def _h_repo_tree(ctx: Any, args: dict) -> dict:
 
 
 async def _h_filesystem_read(ctx: Any, args: dict) -> dict:
-    path = _path_inside(ctx.workspace, args["path"])
+    rel = str(args.get("path") or "").strip()
+    if not rel:
+        return {"ok": False, "error": "filesystem.read requires a 'path' argument"}
+    path = _path_inside(ctx.workspace, rel)
     if not path.exists():
         return {"ok": False, "error": f"{path} does not exist"}
     if path.is_dir():
@@ -240,7 +243,9 @@ async def _h_filesystem_write(ctx: Any, args: dict) -> dict:
 async def _h_shell(ctx: Any, args: dict) -> dict:
     import asyncio
 
-    cmd = args["command"]
+    cmd = str(args.get("command") or "").strip()
+    if not cmd:
+        return {"ok": False, "error": "shell requires a 'command' argument"}
     read_only = not re.search(r"(;|&&|\|\||>|rm |mv |mkdir|curl -X|git push|docker compose up)", cmd)
     if not read_only and not ctx.agent.allows("shell.write"):
         return {"ok": False, "error": "write shell commands denied by permission policy"}
@@ -497,7 +502,10 @@ async def _h_db_query(ctx: Any, args: dict) -> dict:
     """Run a read-only SQL query against a SQLite database in the workspace."""
     import sqlite3
 
-    db_path = _path_inside(ctx.workspace, args["db"])
+    db_rel = str(args.get("db") or "").strip()
+    if not db_rel:
+        return {"ok": False, "error": "db.query requires a 'db' argument"}
+    db_path = _path_inside(ctx.workspace, db_rel)
     if not db_path.exists():
         return {"ok": False, "error": f"database {db_path} does not exist"}
     query = args["query"].strip()
@@ -520,10 +528,15 @@ async def _h_db_query(ctx: Any, args: dict) -> dict:
 async def _h_file_patch(ctx: Any, args: dict) -> dict:
     """Apply a unified diff to a file inside the workspace (targets validated
     inside the workspace; hunks must match context exactly)."""
-    target = _path_inside(ctx.workspace, args["path"])
+    rel = str(args.get("path") or "").strip()
+    if not rel:
+        return {"ok": False, "error": "file.patch requires a 'path' argument"}
+    target = _path_inside(ctx.workspace, rel)
     if not target.exists():
         return {"ok": False, "error": f"{target} does not exist"}
-    patch = args.get("patch", "")
+    patch = str(args.get("patch") or "")
+    if not patch:
+        return {"ok": False, "error": "file.patch requires a 'patch' argument"}
     old_lines = target.read_text(errors="replace").splitlines(keepends=True)
     try:
         new_lines = _apply_unified_diff(old_lines, patch)
@@ -584,7 +597,10 @@ def _parse_hunks(diff_lines: list[str]) -> list[dict]:
 
 async def _h_json_query(ctx: Any, args: dict) -> dict:
     """Query a JSON file in the workspace with a dotted path."""
-    target = _path_inside(ctx.workspace, args["path"])
+    rel = str(args.get("path") or "").strip()
+    if not rel:
+        return {"ok": False, "error": "json.query requires a 'path' argument"}
+    target = _path_inside(ctx.workspace, rel)
     if not target.exists():
         return {"ok": False, "error": f"{target} does not exist"}
     try:
@@ -685,7 +701,9 @@ async def _h_web_scrape(ctx: Any, args: dict) -> dict:
     """
     import httpx
 
-    url = args["url"]
+    url = str(args.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "web.scrape requires a 'url' argument"}
     if not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "url must be http(s)"}
     try:
@@ -767,7 +785,10 @@ async def _h_tool_health(ctx: Any, args: dict) -> dict:
 
 
 async def _h_browser_open(ctx: Any, args: dict) -> dict:
-    return await _browser_session(ctx).open(args["url"])
+    url = str(args.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "browser.open requires a 'url' argument"}
+    return await _browser_session(ctx).open(url)
 
 
 async def _h_browser_snapshot(ctx: Any, args: dict) -> dict:
@@ -775,19 +796,32 @@ async def _h_browser_snapshot(ctx: Any, args: dict) -> dict:
 
 
 async def _h_browser_click(ctx: Any, args: dict) -> dict:
-    return await _browser_session(ctx).click(args["selector"])
+    selector = str(args.get("selector") or "").strip()
+    if not selector:
+        return {"ok": False, "error": "browser.click requires a 'selector' argument"}
+    return await _browser_session(ctx).click(selector)
 
 
 async def _h_browser_type(ctx: Any, args: dict) -> dict:
-    return await _browser_session(ctx).type_text(args["selector"], args["text"])
+    selector = str(args.get("selector") or "").strip()
+    text = str(args.get("text") or "").strip()
+    if not selector:
+        return {"ok": False, "error": "browser.type requires a 'selector' argument"}
+    if not text:
+        return {"ok": False, "error": "browser.type requires a 'text' argument"}
+    return await _browser_session(ctx).type_text(selector, text)
 
 
 async def _h_browser_evaluate(ctx: Any, args: dict) -> dict:
-    return await _browser_session(ctx).evaluate(args["expression"])
+    expression = str(args.get("expression") or "").strip()
+    if not expression:
+        return {"ok": False, "error": "browser.evaluate requires an 'expression' argument"}
+    return await _browser_session(ctx).evaluate(expression)
 
 
 async def _h_browser_screenshot(ctx: Any, args: dict) -> dict:
-    return await _browser_session(ctx).screenshot(args["path"])
+    path = str(args.get("path") or "").strip() or "screenshot.png"
+    return await _browser_session(ctx).screenshot(path)
 
 
 async def _h_browser_close(ctx: Any, args: dict) -> dict:
@@ -1031,7 +1065,7 @@ async def _h_agent_resolve(ctx: Any, args: dict) -> dict:
 BUILTIN_TOOLS: list[ToolDef] = [
     ToolDef(name="filesystem.read", description="Read a file or list a directory inside the project workspace.",
             permission_key="filesystem.read", risk_level="low",
-            config={"parameters": {"path": {"type": "string", "description": "File path or directory inside the project workspace"}}}),
+            config={"parameters": {"path": {"type": "string", "description": "File path or directory inside the project workspace"}}, "required": ["path"]}),
     ToolDef(name="repo.tree", description="List the project workspace file tree (dirs + files).",
             permission_key="filesystem.read", risk_level="low",
             config={"parameters": {"path": {"type": "string", "description": "Directory to list, default workspace root"}}}),
@@ -1040,86 +1074,101 @@ BUILTIN_TOOLS: list[ToolDef] = [
             config={"parameters": {"repo": {"type": "string", "description": "owner/name repo to push to (defaults to DEPLOY_REPO env)"}}}),
     ToolDef(name="render.manage", description="Manage Render static sites: list, create (from a GitHub repo, autoDeploy), delete. GUARDED: Bellam & Kaaram / QueSnack services are untouchable. Needs RENDER_API_KEY + RENDER_OWNER.",
             permission_key="deploy", risk_level="high",
-            config={"parameters": {"action": {"type": "string", "description": "list | create | delete"}, "name": {"type": "string", "description": "service name"}, "repo": {"type": "string", "description": "github repo URL for create"}, "service_id": {"type": "string", "description": "render service id for delete"}}}),
+            config={"parameters": {"action": {"type": "string", "description": "list | create | delete"}, "name": {"type": "string", "description": "service name"}, "repo": {"type": "string", "description": "github repo URL for create"}, "service_id": {"type": "string", "description": "render service id for delete"}}, "required": ["action"]}),
     ToolDef(name="filesystem.write", description="Write a file inside the project workspace.",
             permission_key="filesystem.write", risk_level="medium",
-            config={"parameters": {"path": {"type": "string", "description": "File path inside the project workspace"}, "content": {"type": "string", "description": "Complete file content"}}}),
+            config={"parameters": {"path": {"type": "string", "description": "File path inside the project workspace"}, "content": {"type": "string", "description": "Complete file content"}}, "required": ["path", "content"]}),
     ToolDef(name="shell", description="Run a shell command inside the workspace (write commands need permission).",
             permission_key="shell", risk_level="high",
-            config={"parameters": {"command": {"type": "string", "description": "Shell command"}}}),
+            config={"parameters": {"command": {"type": "string", "description": "Shell command"}}, "required": ["command"]}),
     ToolDef(name="web.search", description="Search the web via DuckDuckGo (keyless). Returns ranked results with titles/URLs/snippets.",
             permission_key="web.search", risk_level="low",
-            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "max results (default 6)"}}}),
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "max results (default 6)"}}, "required": ["query"]}),
     ToolDef(name="hn.search", description="Search Hacker News via the Algolia HN API (keyless): stories, comments, points.",
             permission_key="web.search", risk_level="low",
-            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "max hits (default 10)"}}}),
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "max hits (default 10)"}}, "required": ["query"]}),
     ToolDef(name="reddit.search", description="Search Reddit (keyless, old.reddit JSON): posts, comments, scores — real community signal.",
             permission_key="web.search", risk_level="low",
-            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "subreddit": {"type": "string", "description": "optional subreddit to scope"}, "limit": {"type": "integer", "description": "max posts (default 10)"}}}),
+            config={"parameters": {"query": {"type": "string", "description": "Search query"}, "subreddit": {"type": "string", "description": "optional subreddit to scope"}, "limit": {"type": "integer", "description": "max posts (default 10)"}}, "required": ["query"]}),
     ToolDef(name="calculator", description="Evaluate a safe arithmetic expression.",
             permission_key="calculator", risk_level="low",
-            config={"parameters": {"expression": {"type": "string", "description": "Math expression"}}}),
+            config={"parameters": {"expression": {"type": "string", "description": "Math expression"}}, "required": ["expression"]}),
     ToolDef(name="memory.recall", description="Recall persisted memory entries (agent/project/org/task scope).",
             permission_key="memory.recall", risk_level="low",
-            config={"parameters": {"query": {"type": "string", "description": "What to recall"}}}),
+            config={"parameters": {"query": {"type": "string", "description": "What to recall"}}, "required": ["query"]}),
     ToolDef(name="memory.save", description="Persist a memory entry (fact, decision, lesson, preference).",
             permission_key="memory.save", risk_level="low",
-            config={"parameters": {"content": {"type": "string", "description": "Fact to remember"}}}),
+            config={"parameters": {"content": {"type": "string", "description": "Fact to remember"}}, "required": ["content"]}),
     ToolDef(name="project.state", description="Inspect the current project and its task list.",
             permission_key="project.state", risk_level="low",
             config={"parameters": {}}),
     ToolDef(name="mattermost.post", description="Post a message to a Mattermost channel under this agent's identity.",
             permission_key="mattermost.post", risk_level="low",
-            config={"parameters": {"channel": {"type": "string", "description": "Channel name"}, "message": {"type": "string", "description": "Message text"}}}),
+            config={"parameters": {"channel": {"type": "string", "description": "Channel name (defaults to the agent's branch channel)"}, "message": {"type": "string", "description": "Message text"}}, "required": ["message"]}),
     ToolDef(name="api.call", description="Call a registered API from the API catalog (rate-limited, logged).",
             permission_key="api.call", risk_level="medium"),
     ToolDef(name="mcp.call", description="Call a tool on a governed MCP server (trust/permission/health gated, injection-scanned).",
-            permission_key="mcp.call", risk_level="medium"),
+            permission_key="mcp.call", risk_level="medium",
+            config={"parameters": {"server": {"type": "string", "description": "MCP server name"}, "tool": {"type": "string", "description": "Tool name on that server"}, "args": {"type": "object", "description": "Tool arguments"}}, "required": ["server", "tool"]}),
     ToolDef(name="mcp.select", description="Rank available MCP tools for a capability need (trust-, permission- and health-aware).",
-            permission_key="mcp.call", risk_level="low"),
+            permission_key="mcp.call", risk_level="low",
+            config={"parameters": {"need": {"type": "string", "description": "Capability need to satisfy"}}, "required": ["need"]}),
     ToolDef(name="repo.search", description="Search file contents under the project workspace.",
             permission_key="repo.search", risk_level="low",
-            config={"parameters": {"pattern": {"type": "string", "description": "Substring to search for in workspace files"}}}, category="capability"),
+            config={"parameters": {"pattern": {"type": "string", "description": "Substring to search for in workspace files"}}, "required": ["pattern"]}, category="capability"),
     ToolDef(name="repo.tree", description="List the project workspace file tree.",
             permission_key="repo.tree", risk_level="low", category="capability"),
     ToolDef(name="db.query", description="Run a read-only SQL query against a SQLite DB in the workspace.",
-            permission_key="db.query", risk_level="medium", category="capability"),
+            permission_key="db.query", risk_level="medium",
+            config={"parameters": {"db": {"type": "string", "description": "Relative path to the SQLite file"}, "query": {"type": "string", "description": "Read-only SQL"}}, "required": ["db", "query"]}, category="capability"),
     ToolDef(name="file.patch", description="Apply a unified diff to a file inside the workspace (must apply cleanly).",
-            permission_key="file.patch", risk_level="medium", category="capability"),
+            permission_key="file.patch", risk_level="medium",
+            config={"parameters": {"path": {"type": "string", "description": "File to patch"}, "patch": {"type": "string", "description": "Unified diff text"}}, "required": ["path", "patch"]}, category="capability"),
     ToolDef(name="json.query", description="Query a JSON file in the workspace with a dotted path.",
-            permission_key="json.query", risk_level="low", category="capability"),
+            permission_key="json.query", risk_level="low",
+            config={"parameters": {"path": {"type": "string", "description": "JSON file path"}, "path_expr": {"type": "string", "description": "Dotted path expression"}}, "required": ["path", "path_expr"]}, category="capability"),
     ToolDef(name="web.scrape", description="Fetch a URL and extract visible text (network).",
-            permission_key="web.scrape", risk_level="medium", category="capability"),
+            permission_key="web.scrape", risk_level="medium",
+            config={"parameters": {"url": {"type": "string", "description": "http(s) URL to fetch"}}, "required": ["url"]}, category="capability"),
     ToolDef(name="git.status", description="Read-only git introspection (status/log/diff/branch).",
-            permission_key="git.status", risk_level="low", category="capability"),
+            permission_key="git.status", risk_level="low",
+            config={"parameters": {"command": {"type": "string", "description": "status | log | diff | branch | remote | show"}}}, category="capability"),
     ToolDef(name="tool.discover", description="Discover which tools suit a capability need.",
             permission_key="tool.discover", risk_level="low", category="system"),
     ToolDef(name="tool.health", description="Check a tool's health/availability.",
             permission_key="tool.health", risk_level="low", category="system"),
     ToolDef(name="agent.delegate", description="Delegate a bounded subtask to a child agent (depth/parallel/budget limited). Use agent='auto' for purposeful selection among authorized, best-suited agents.",
-            permission_key="agent.delegate", risk_level="medium", category="system"),
+            permission_key="agent.delegate", risk_level="medium",
+            config={"parameters": {"agent": {"type": "string", "description": "Child agent id or 'auto'"}, "description": {"type": "string", "description": "Subtask description"}}, "required": ["agent", "description"]}, category="system"),
     ToolDef(name="agent.challenge", description="Raise a structured disagreement with another agent: claim + evidence + severity + recommended action.",
-            permission_key="mattermost.post", risk_level="low", category="system"),
+            permission_key="mattermost.post", risk_level="low",
+            config={"parameters": {"agent": {"type": "string", "description": "Recipient agent id"}, "concern": {"type": "string", "description": "The disagreement"}, "severity": {"type": "string", "description": "low | medium | high | blocking"}, "evidence": {"type": "array", "description": "Supporting evidence"}}, "required": ["agent", "concern"]}, category="system"),
     ToolDef(name="agent.resolve", description="Resolve a challenge you received: accept | reject (rationale required) | escalate.",
-            permission_key="mattermost.post", risk_level="low", category="system"),
+            permission_key="mattermost.post", risk_level="low",
+            config={"parameters": {"challenge_id": {"type": "string", "description": "Challenge to resolve"}, "verdict": {"type": "string", "description": "accept | reject | escalate"}, "rationale": {"type": "string", "description": "Required when rejecting"}}, "required": ["challenge_id", "verdict"]}, category="system"),
     ToolDef(name="browser.open", description="Open a URL in the agent's isolated browser session (http/https/file/data).",
-            permission_key="browser.open", risk_level="low", category="browser"),
+            permission_key="browser.open", risk_level="low",
+            config={"parameters": {"url": {"type": "string", "description": "URL to open"}}, "required": ["url"]}, category="browser"),
     ToolDef(name="browser.snapshot", description="Read the current page: headings, links, buttons, inputs and visible text.",
             permission_key="browser.snapshot", risk_level="low", category="browser"),
     ToolDef(name="browser.click", description="Click the first element matching a CSS selector on the current page.",
-            permission_key="browser.click", risk_level="low", category="browser"),
+            permission_key="browser.click", risk_level="low",
+            config={"parameters": {"selector": {"type": "string", "description": "CSS selector"}}, "required": ["selector"]}, category="browser"),
     ToolDef(name="browser.type", description="Type text into the first input matching a CSS selector.",
-            permission_key="browser.type", risk_level="low", category="browser"),
+            permission_key="browser.type", risk_level="low",
+            config={"parameters": {"selector": {"type": "string", "description": "CSS selector"}, "text": {"type": "string", "description": "Text to type"}}, "required": ["selector", "text"]}, category="browser"),
     ToolDef(name="browser.screenshot", description="Save a full-page screenshot into the workspace and return its path.",
             permission_key="browser.screenshot", risk_level="low", category="browser"),
     ToolDef(name="browser.evaluate", description="Run a JavaScript expression in the page (high risk — approval gated).",
-            permission_key="browser.evaluate", risk_level="high", category="browser"),
+            permission_key="browser.evaluate", risk_level="high",
+            config={"parameters": {"expression": {"type": "string", "description": "JS expression"}}, "required": ["expression"]}, category="browser"),
     ToolDef(name="browser.close", description="Close the agent's browser session (releases the process).",
             permission_key="browser.close", risk_level="low", category="browser"),
     ToolDef(name="github", description="Read-only GitHub adapter: search_repos | get_repo | list_issues.",
             permission_key="github", risk_level="medium", category="adapter"),
     ToolDef(name="postgres.query", description="Read-only SQL SELECT against the configured POSTGRES_QUERY_URL (approval gated).",
-            permission_key="postgres.query", risk_level="high", category="adapter"),
+            permission_key="postgres.query", risk_level="high",
+            config={"parameters": {"query": {"type": "string", "description": "Read-only SELECT"}}, "required": ["query"]}, category="adapter"),
     ToolDef(name="docker", description="Read-only Docker adapter: ps | inspect | logs (never mutates).",
             permission_key="docker", risk_level="medium", category="adapter"),
 ]

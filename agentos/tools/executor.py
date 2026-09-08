@@ -173,6 +173,22 @@ class ToolExecutor:
         if handler is None:
             return {"ok": False, "error": f"no handler registered for {tool_name}"}
 
+        # schema validation: enforce required parameters BEFORE invoking the
+        # handler, returning a structured error the model can recover from
+        # instead of a raw KeyError deep in a handler (models occasionally
+        # emit tool calls with missing/empty args)
+        required = (tool.config or {}).get("required") or []
+        if required:
+            missing = [k for k in required
+                       if args.get(k) in (None, "", [], {})]
+            if missing:
+                await self._audit(ctx, agent, tool_name, "tool.args_invalid",
+                                  "error",
+                                  {"missing": missing, "args": redact_args(args)})
+                return {"ok": False, "error": (
+                    f"{tool_name} missing required parameter(s): "
+                    f"{', '.join(missing)}")}
+
         # capability pre-hooks (from active skills) may adjust args
         active_skills = getattr(ctx, "active_skills", []) or []
         if self.capabilities is not None:

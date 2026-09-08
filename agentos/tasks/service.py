@@ -8,16 +8,17 @@ runnable.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from agentos.db.store import EntityStore
 from agentos.domain.models import Task, TaskStatus, new_id
 
 
 class TaskService:
-    def __init__(self, store: EntityStore) -> None:
+    def __init__(self, store: EntityStore, event_bus: Optional[Any] = None) -> None:
         self.store = store
         self._collection = "tasks"
+        self._events = event_bus
 
     async def create(self, project_id: str, title: str, description: str = "", *,
                      assigned_agent: Optional[str] = None, parent_task: Optional[str] = None,
@@ -63,6 +64,7 @@ class TaskService:
     async def set_status(self, task_id: str, status: TaskStatus, *,
                          error: Optional[str] = None, result: Optional[str] = None) -> Task:
         task = await self.require(task_id)
+        prev = task.status
         task.status = status
         if error is not None:
             task.error = error
@@ -71,6 +73,17 @@ class TaskService:
         await self.save(task)
         if status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
             await self._unblock_dependents(task_id, status)
+        if self._events is not None and status != prev:
+            try:
+                await self._events.publish(
+                    "task.status_changed",
+                    {"task": task.title, "from": prev.value, "to": status.value,
+                     "error": error, "agent": task.assigned_agent},
+                    task_id=task_id, project_id=task.project_id,
+                    agent_id=task.assigned_agent,
+                    severity="error" if status in (TaskStatus.FAILED,) else "info")
+            except Exception:  # noqa: BLE001
+                pass
         return task
 
     async def _unblock_dependents(self, task_id: str, status: TaskStatus) -> None:

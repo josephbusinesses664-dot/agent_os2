@@ -144,3 +144,41 @@ async def test_executor_records_tool_spans(svc):
     tool_spans = [s for s in spans if s["kind"] == "tool"]
     assert tool_spans, spans
     assert tool_spans[0]["tool"] == "calculator"
+
+
+@pytest.mark.asyncio
+async def test_missing_required_args_return_structured_error(svc):
+    """A tool call missing declared required params must return a structured
+    error naming them — never a raw KeyError crash (models occasionally emit
+    empty/partial arg dicts)."""
+    agent = await svc.agent_registry.get("executive")
+    project = await svc.projects.create("args-test", "t")
+    task = await svc.tasks.create(project.project_id, "t", "d")
+    ctx = svc.runtime(agent, task, project).ctx
+
+    # filesystem.read requires 'path'
+    result = await svc.executor.execute(ctx, agent, "filesystem.read", {})
+    assert not result["ok"]
+    assert "path" in result["error"]
+    assert "KeyError" not in result["error"]
+
+    # db.query requires 'db' and 'query'
+    result = await svc.executor.execute(ctx, agent, "db.query", {"db": "x.db"})
+    assert not result["ok"]
+    assert "query" in result["error"]
+
+    # shell requires 'command' (approve the high-risk tool so the call
+    # reaches arg validation)
+    shell_ctx = svc.runtime(agent, task, project, approved_tools={"shell"}).ctx
+    result = await svc.executor.execute(shell_ctx, agent, "shell", {})
+    assert not result["ok"]
+    assert "command" in result["error"]
+
+    # optional params are not demanded (repo.tree has no required)
+    result = await svc.executor.execute(ctx, agent, "repo.tree", {})
+    assert result["ok"]
+
+    # a valid call still works
+    result = await svc.executor.execute(ctx, agent, "calculator", {"expression": "6*7"})
+    assert result["ok"]
+    assert str(result["result"]) == "42"

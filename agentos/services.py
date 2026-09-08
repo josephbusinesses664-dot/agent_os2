@@ -142,7 +142,7 @@ class Services:
         self.scoped_memory = ScopedMemoryStore(self.memory, audit=self.audit)
         self.messages = MessageBus(self.entity_store)
         self.projects = ProjectService(self.entity_store)
-        self.tasks = TaskService(self.entity_store)
+        self.tasks = TaskService(self.entity_store, event_bus=self.events)
         self.prompts = PromptLibrary(self.settings)
         self.capabilities = CapabilityManager(self.tool_registry)
         self.performance = PerformanceTracker(self.entity_store, emit=self.events.publish)

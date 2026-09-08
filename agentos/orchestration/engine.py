@@ -609,6 +609,7 @@ class OrchestratorEngine:
             # recoverable failure → retry once with a strategy change (stronger
             # model for this run only), then escalate to the parent.
             if result.error and result.fail_class in TRANSIENT_CLASSES and depth <= settings.max_agent_depth:
+                await self.svc.tasks.set_status(child.task_id, TaskStatus.RECOVERING)
                 await self.svc.events.publish(
                     "agent.retry_strategy_changed",
                     {"agent": agent.id, "task": child.task_id,

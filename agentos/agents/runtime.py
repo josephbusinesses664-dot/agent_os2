@@ -31,6 +31,12 @@ from agentos.tools.executor import ToolExecutor
 logger = logging.getLogger("agentos.runtime")
 
 MAX_TOOL_ROUNDS = 12
+MAX_REPAIR_ROUNDS = 2  # verify → repair → re-verify iterations
+# context budget: when the accumulated message history passes this size the
+# oldest tool-result transcripts are condensed to one-line summaries so a
+# long tool session never overflows the model context (§19)
+CONTEXT_BUDGET_CHARS = 48_000
+CONTEXT_TRIM_TO_CHARS = 30_000
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _STRIP_XML_RE = re.compile(
     r"(<invoke\s+name=[\"\'][^\"\']+[\"\']\s*(?:/>|>.*?</invoke>)|"
@@ -89,6 +95,7 @@ class AgentRunResult:
     fail_class: Optional[str] = None  # transient | configuration | provider | permission | logic | human_required
     verified: bool = False
     verification_note: str = ""
+    repairs: int = 0  # how many verify→repair iterations this run used
     reflection: dict[str, Any] = field(default_factory=dict)
 
 
@@ -313,14 +320,94 @@ class AgentRuntime:
             result.fail_class = classify_error(str(exc))
             return result
 
+        # -- main tool round loop -------------------------------------------
         executed_signatures: set[str] = set()
+        await self._run_tool_rounds(model_id, system, messages, task, result,
+                                    executed_signatures, response)
+
+        # -- minimum-work guard: never let an opening line pass as the work --
+        if not result.error and len((result.content or "").strip()) < 400:
+            final_text = await self._finish_with_work(
+                model_id, system, messages, task,
+                ("[Your answer so far is just an opening — the actual work is "
+                 "missing. Do the full task now: use tools to gather what you "
+                 "need, then give the complete final deliverable in your answer "
+                 "— analysis, findings, conclusions, everything, in full detail.]"))
+            if len(final_text) >= 400:
+                result.content = final_text
+            else:
+                result.content = result.content or final_text
+                result.error = "stage produced no substantive output"
+                result.fail_class = "logic"
+
+        # -- verify → repair loop: an unverified result gets concrete
+        #    failure feedback and one more chance (bounded), instead of the
+        #    run ending the moment the model says it is done (§5/§14)
+        repair = 0
+        if not result.error:
+            try:
+                from agentos.domain.models import TaskStatus
+
+                await ctx.services.tasks.set_status(task.task_id, TaskStatus.VERIFYING)
+            except Exception:  # noqa: BLE001
+                pass
+        while not result.error and repair < MAX_REPAIR_ROUNDS:
+            await self._verify_result(task, result)
+            if result.verified:
+                break
+            repair += 1
+            result.repairs = repair
+            await ctx.event_bus.publish(
+                "agent.repair", {"agent": self.agent.id, "task": task.task_id,
+                                 "attempt": repair,
+                                 "note": result.verification_note},
+                agent_id=self.agent.id, task_id=task.task_id,
+                project_id=task.project_id)
+            messages.append({
+                "role": "user",
+                "content": ("[VERIFICATION FAILED — your work is not done yet. "
+                             f"Failure: {result.verification_note}. "
+                             "Fix the specific problems named above (create the "
+                             "missing artifacts on disk, retry the failed tools "
+                             "with corrected arguments, etc.), then write your "
+                             "complete final answer again with the evidence.]"),
+            })
+            try:
+                response = await self._call_with_failover(
+                    model_id, system, messages, task)
+            except Exception as exc:  # noqa: BLE001
+                result.error = str(exc)
+                result.fail_class = classify_error(str(exc))
+                break
+            await self._run_tool_rounds(model_id, system, messages, task, result,
+                                        executed_signatures, response)
+            if result.error:
+                break
+        else:
+            # loop exited because error was set or repairs exhausted; verify
+            # once more so the final note reflects the last attempt
+            if not result.error:
+                await self._verify_result(task, result)
+
+        result.reflection = self._build_reflection(result, task)
+        return result
+
+    async def _run_tool_rounds(self, model_id: str, system: str,
+                               messages: list[dict], task: Task,
+                               result: AgentRunResult,
+                               executed_signatures: set[str],
+                               response: ModelResponse) -> None:
+        """Execute the model/tool round loop until the model answers plainly
+        or the round budget is exhausted. Mutates `result` in place; never
+        raises for ordinary failures."""
+        ctx = self.ctx
         duplicate_nudges = 0
         self._schema_name_map = {}
-        for round_index in range(MAX_TOOL_ROUNDS):
+        for _round_index in range(MAX_TOOL_ROUNDS):
             if response.error:
                 result.error = response.error
                 result.fail_class = classify_error(response.error)
-                break
+                return
             await self._track_usage(response, task, result)
             calls = parse_tool_calls(response)
             for call in calls:
@@ -363,10 +450,10 @@ class AgentRuntime:
                     except Exception as exc:  # noqa: BLE001
                         result.error = str(exc)
                         result.fail_class = classify_error(str(exc))
-                        return result
+                        return
                     continue
                 result.content = clean_content(response.content or "")
-                break
+                return
             result.tool_calls.extend(fresh_calls)
             await ctx.event_bus.publish("agent.tool_calls", {"agent": self.agent.id,
                                                              "task": task.task_id,
@@ -387,16 +474,17 @@ class AgentRuntime:
                     "role": "user",
                     "content": f"[tool result for {tool_name}]\n{json.dumps(tool_result)[:4000]}",
                 })
+                self._compact_context(messages)
                 if tool_result.get("pending_approval"):
                     result.error = f"awaiting approval {tool_result['pending_approval']}"
                     result.fail_class = "human_required"
-                    return result
+                    return
             try:
                 response = await self._call_with_failover(model_id, system, messages, task)
             except Exception as exc:  # noqa: BLE001
                 result.error = str(exc)
                 result.fail_class = classify_error(str(exc))
-                return result
+                return
         else:
             # exhausted the round budget: keep whatever was produced rather
             # than discarding real work (a stage that wrote files and ran out
@@ -409,26 +497,25 @@ class AgentRuntime:
                 result.error = f"exceeded {MAX_TOOL_ROUNDS} tool rounds"
                 result.fail_class = "logic"
 
-        # -- minimum-work guard: never let an opening line pass as the work --
-        if not result.error and len((result.content or "").strip()) < 400:
-            final_text = await self._finish_with_work(
-                model_id, system, messages, task,
-                ("[Your answer so far is just an opening — the actual work is "
-                 "missing. Do the full task now: use tools to gather what you "
-                 "need, then give the complete final deliverable in your answer "
-                 "— analysis, findings, conclusions, everything, in full detail.]"))
-            if len(final_text) >= 400:
-                result.content = final_text
-            else:
-                result.content = result.content or final_text
-                result.error = "stage produced no substantive output"
-                result.fail_class = "logic"
-
-        # -- verify step: evidence over claims ------------------------------
-        if not result.error:
-            await self._verify_result(task, result)
-        result.reflection = self._build_reflection(result, task)
-        return result
+    @staticmethod
+    def _compact_context(messages: list[dict]) -> int:
+        """Condense the oldest tool-result transcripts once history exceeds the
+        context budget. Returns how many messages were compressed."""
+        total = sum(len(m.get("content", "")) for m in messages)
+        if total <= CONTEXT_BUDGET_CHARS:
+            return 0
+        compressed = 0
+        for m in messages:
+            if total <= CONTEXT_TRIM_TO_CHARS:
+                break
+            content = m.get("content", "")
+            if m.get("role") == "user" and content.startswith("[tool result for "):
+                # keep the tool name + first line as a one-line pointer
+                head = content.split("\n", 1)[0]
+                m["content"] = f"{head} (transcript trimmed — see artifacts/audit log)"
+                total -= len(content) - len(m["content"])
+                compressed += 1
+        return compressed
 
     async def _finish_with_work(self, model_id: str, system: str,
                                 messages: list[dict], task: Task,
@@ -487,7 +574,9 @@ class AgentRuntime:
                 notes.append("artifacts verified on disk")
         failed_tools = [r for r in result.tool_results if not r.get("ok")]
         if failed_tools:
-            notes.append(f"{len(failed_tools)} tool call(s) failed")
+            notes.append(
+                f"{len(failed_tools)} tool call(s) FAILED: "
+                + "; ".join(f"{r.get('tool')}={str(r.get('error'))[:80]}" for r in failed_tools[:3]))
         if not notes:
             notes.append("no artifacts claimed, no tool failures")
         result.verified = not any("FAILED" in n for n in notes)
@@ -643,13 +732,14 @@ class AgentRuntime:
             params = tool.config.get("parameters")
             if not isinstance(params, dict):
                 params = {}
+            required = (tool.config or {}).get("required") or list(params.keys())
             schemas.append({
                 "type": "function",
                 "function": {
                     "name": schema_name,
                     "description": tool.description,
                     "parameters": {"type": "object", "properties": params,
-                                   "required": list(params.keys())},
+                                   "required": required},
                 },
             })
         return schemas

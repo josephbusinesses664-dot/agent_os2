@@ -120,6 +120,8 @@ class TaskStatus(str, Enum):
     PENDING = "pending"
     QUEUED = "queued"
     RUNNING = "running"
+    VERIFYING = "verifying"   # evidence check / repair iteration in progress
+    RECOVERING = "recovering" # failed run being retried or reassigned
     BLOCKED = "blocked"
     AWAITING_REVIEW = "awaiting_review"
     AWAITING_APPROVAL = "awaiting_approval"
