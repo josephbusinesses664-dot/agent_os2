@@ -259,6 +259,34 @@ async def test_file_tools_handle_directory_targets(svc):
 
 
 @pytest.mark.asyncio
+async def test_git_status_and_branch_do_not_crash(svc):
+    """git.status / git.branch must not pass None as an argv element to
+    create_subprocess_exec (TypeError: expected str... not NoneType seen
+    live when the model called git.status)."""
+    import subprocess
+    from pathlib import Path
+
+    agent = await svc.agent_registry.get("executive")
+    project = await svc.projects.create("git-test", "t")
+    task = await svc.tasks.create(project.project_id, "t", "d")
+    ctx = svc.runtime(agent, task, project).ctx
+    ctx.workspace.mkdir(parents=True, exist_ok=True)
+
+    # give the workspace a real git repo so git.status has something to read
+    subprocess.run(["git", "init", "-q", str(ctx.workspace)], check=False)
+    subprocess.run(["git", "-C", str(ctx.workspace), "config", "user.email", "t@t.io"],
+                   check=False)
+    subprocess.run(["git", "-C", str(ctx.workspace), "config", "user.name", "t"],
+                   check=False)
+
+    for cmd in ("status", "branch", "remote", "log"):
+        result = await svc.executor.execute(ctx, agent, "git.status",
+                                            {"command": cmd})
+        assert result["ok"] is not None
+        assert "TypeError" not in str(result)
+
+
+@pytest.mark.asyncio
 async def test_circuit_breaker_recovers_on_success(svc, monkeypatch):
     """A successful call resets the circuit (closed) and clears the failure
     count — a transiently broken tool recovers without intervention."""

@@ -758,8 +758,11 @@ async def _h_git(ctx: Any, args: dict) -> dict:
     allowed = ("status", "log", "diff", "branch", "remote", "show")
     if cmd not in allowed:
         return {"ok": False, "error": f"git.{cmd} not allowed (read-only: {', '.join(allowed)})"}
+    argv = ["git", cmd]
+    if cmd in ("log", "diff"):
+        argv.append("--no-pager")
     proc = await asyncio.create_subprocess_exec(
-        "git", cmd, "--no-pager" if cmd in ("log", "diff") else None,
+        *argv,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         cwd=str(ctx.workspace),
     )
