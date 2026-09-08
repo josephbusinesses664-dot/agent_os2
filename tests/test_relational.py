@@ -133,6 +133,51 @@ async def test_migrates_legacy_docs_rows(tmp_path):
         await repo.close()
 
 
+@pytest.mark.asyncio
+async def test_migration_handles_dependency_order(tmp_path):
+    """Docs rows are migrated parents-first: events/approvals whose projects
+    appear *later* in the docs table must still migrate (FK parents first),
+    while genuinely orphaned rows are skipped."""
+    from sqlalchemy import insert as sa_insert
+
+    from agentos.db.relational import DocRow
+
+    now = datetime.now(timezone.utc)
+    legacy = _repo(tmp_path, "dep.db")
+    await legacy.init()
+    async with legacy.session_factory() as session:
+        # children deliberately inserted BEFORE their parents in the docs table
+        rows = [
+            ("events", "evt_1", {"event_id": "evt_1", "project_id": "prj_1",
+                                  "type": "x"}),
+            ("approvals", "apr_1", {"approval_id": "apr_1",
+                                     "project_id": "prj_1", "agent_id": "agent_1",
+                                     "action": "deploy"}),
+            ("projects", "prj_1", {"project_id": "prj_1", "name": "P"}),
+            ("agents", "agent_1", {"id": "agent_1", "role": "w", "name": "a"}),
+            ("events", "evt_orphan", {"event_id": "evt_orphan",
+                                        "project_id": "nope", "type": "y"}),
+            ("tasks", "t1", {"task_id": "t1", "project_id": "prj_1"}),
+        ]
+        for collection, key, data in rows:
+            await session.execute(sa_insert(DocRow).values(
+                collection=collection, key=key, data=data, updated_at=now))
+        await session.commit()
+    await legacy.close()
+
+    repo = _repo(tmp_path, "dep.db")
+    await repo.init()
+    try:
+        assert await repo.count("events") == 1  # orphan excluded
+        assert (await repo.get("events", "evt_1"))["project_id"] == "prj_1"
+        assert await repo.count("approvals") == 1
+        assert await repo.count("projects") == 1
+        assert await repo.count("tasks") == 1
+        assert await repo.get("events", "evt_orphan") is None
+    finally:
+        await repo.close()
+
+
 # ---------------------------------------------------------------------------
 # EntityStore integration — the whole platform works on the relational repo
 # ---------------------------------------------------------------------------

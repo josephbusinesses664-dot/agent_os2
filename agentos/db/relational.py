@@ -192,8 +192,21 @@ class RelationalRepository(Repository):
 
     # -- lifecycle --------------------------------------------------------
     async def init(self) -> None:
-        async with self.engine.begin() as conn:
-            await conn.run_sync(RelationalBase.metadata.create_all)
+        # create_all + migration must be serialized: on the box the app and
+        # the worker containers boot together and would otherwise race
+        # CREATE TABLE (one wins, the other crashes on the implicit type
+        # index). A Postgres advisory lock arbitrates across processes;
+        # SQLite (tests) is single-process so no lock is needed.
+        if self.engine.dialect.name == "postgresql":
+            async with self.engine.begin() as conn:
+                await conn.execute(text("SELECT pg_advisory_lock(727001)"))
+                try:
+                    await conn.run_sync(RelationalBase.metadata.create_all)
+                finally:
+                    await conn.execute(text("SELECT pg_advisory_unlock(727001)"))
+        else:
+            async with self.engine.begin() as conn:
+                await conn.run_sync(RelationalBase.metadata.create_all)
         await self.migrate_from_docs()
 
     async def close(self) -> None:
@@ -204,31 +217,42 @@ class RelationalRepository(Repository):
 
         Runs on every init — `INSERT ... ON CONFLICT DO NOTHING` semantics
         make re-runs harmless. Returns the number of rows migrated.
+
+        Row order matters: FK-referenced rows must land before the rows that
+        reference them (a project before its events, an agent before its
+        approvals), so collections are migrated in dependency order — parents
+        first. Truly orphaned rows (references to parents that never existed)
+        are logged and skipped without bricking the migration.
         """
         migrated = 0
         async with self.session_factory() as session:
             rows = (await session.execute(
                 select(DocRow))).scalars().all()
+            # group by collection, then order collections: parents before
+            # children (a collection with FK targets migrates after them)
+            by_collection: dict[str, list] = {}
             for row in rows:
-                spec = SCHEMA.get(row.collection)
-                if not spec:
-                    continue  # stays in the legacy table
-                values = _parse_key(row.key, spec["keys"])
-                if values is None:
-                    continue
-                try:
-                    # savepoint per row: a failing insert (orphaned FK) rolls
-                    # back to the savepoint and leaves the migration usable
-                    async with session.begin_nested():
-                        migrated += await self._upsert_locked(
-                            session, row.collection, values, row.data,
-                            row.updated_at)
-                except Exception as exc:  # noqa: BLE001
-                    # orphaned legacy rows (references to deleted parents) must
-                    # not brick the migration — log and skip; live writes still
-                    # enforce FKs strictly.
-                    logger.warning("skipping unmigratable legacy %s:%s — %s",
-                                   row.collection, row.key, exc)
+                by_collection.setdefault(row.collection, []).append(row)
+            for collection in _migration_order():
+                for row in by_collection.get(collection, []):
+                    spec = SCHEMA.get(row.collection)
+                    if not spec:
+                        continue  # stays in the legacy table
+                    values = _parse_key(row.key, spec["keys"])
+                    if values is None:
+                        continue
+                    try:
+                        # savepoint per row: a failing insert (orphaned FK)
+                        # rolls back to the savepoint and leaves the migration
+                        # usable
+                        async with session.begin_nested():
+                            migrated += await self._upsert_locked(
+                                session, row.collection, values, row.data,
+                                row.updated_at)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "skipping unmigratable legacy %s:%s — %s",
+                            row.collection, row.key, exc)
             await session.commit()
         if migrated:
             logger.info("migrated %d legacy rows into relational tables", migrated)
@@ -365,3 +389,22 @@ def _parse_key(key: str, key_columns: list[str]) -> Optional[dict[str, str]]:
     if len(parts) != len(key_columns):
         return None
     return dict(zip(key_columns, parts))
+
+
+def _migration_order() -> list[str]:
+    """Collections ordered parents-first by their FK targets."""
+    targets: dict[str, set[str]] = {c: set() for c in SCHEMA}
+    for collection, spec in SCHEMA.items():
+        for _col, (ref_table, _ref_col) in spec.get("fks", {}).items():
+            for other, other_spec in SCHEMA.items():
+                if other_spec["table"] == ref_table:
+                    targets[collection].add(other)
+    ordered: list[str] = []
+    remaining = set(SCHEMA)
+    while remaining:
+        ready = [c for c in remaining if not (targets[c] & remaining)]
+        if not ready:  # cycle guard (shouldn't happen with this schema)
+            ready = sorted(remaining)
+        ordered.extend(sorted(ready))
+        remaining -= set(ready)
+    return ordered
