@@ -781,6 +781,11 @@ async def _h_tool_discover(ctx: Any, args: dict) -> dict:
 
 async def _h_tool_health(ctx: Any, args: dict) -> dict:
     report = await ctx.services.tools.health(args.get("tool", ""))
+    # fold in circuit-breaker state so operators can see which tools are
+    # failing fast after repeated failures
+    circuits = getattr(ctx.services, "executor", None)
+    if circuits is not None and hasattr(circuits, "_circuit_status"):
+        report["circuits"] = circuits._circuit_status()
     return {"ok": True, "report": report}
 
 

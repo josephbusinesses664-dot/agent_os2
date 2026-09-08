@@ -182,3 +182,93 @@ async def test_missing_required_args_return_structured_error(svc):
     result = await svc.executor.execute(ctx, agent, "calculator", {"expression": "6*7"})
     assert result["ok"]
     assert str(result["result"]) == "42"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_and_fails_fast(svc, monkeypatch):
+    """Repeated execution failures must open the tool's circuit and make
+    subsequent calls fail fast with a structured error instead of hammering
+    the broken backend (§7 circuit breakers / health state)."""
+    import agentos.tools.executor as ex
+
+    monkeypatch.setattr(ex, "_CIRCUIT_FAIL_THRESHOLD", 3)
+    monkeypatch.setattr(ex, "_CIRCUIT_COOLDOWN_SECONDS", 60.0)
+
+    calls = {"n": 0}
+
+    async def broken(ctx, args):
+        calls["n"] += 1
+        return {"ok": False, "error": "backend down"}
+
+    await svc.tool_registry.register(
+        ToolDef(name="flaky.circuit", description="flaky", risk_level="low"), broken)
+    agent = await svc.agent_registry.get("executive")
+    project = await svc.projects.create("circuit-test", "t")
+    task = await svc.tasks.create(project.project_id, "t", "d")
+    ctx = svc.runtime(agent, task, project).ctx
+
+    # threshold failures execute normally (each fails), then the circuit opens
+    for _ in range(3):
+        result = await svc.executor.execute(ctx, agent, "flaky.circuit", {})
+        assert not result["ok"]
+    assert calls["n"] == 3
+
+    # circuit open → fail fast, handler NOT invoked
+    result = await svc.executor.execute(ctx, agent, "flaky.circuit", {})
+    assert not result["ok"]
+    assert "circuit open" in result["error"]
+    assert calls["n"] == 3
+
+    # health view exposes the open circuit
+    circuits = svc.executor._circuit_status()
+    assert circuits.get("flaky.circuit") == "open"
+
+    # cooldown expiry → half-open probe: one call reaches the handler
+    svc.executor._circuits["flaky.circuit"]["open_until"] = 0  # force expiry
+    result = await svc.executor.execute(ctx, agent, "flaky.circuit", {})
+    assert not result["ok"]
+    assert calls["n"] == 4  # the probe reached the (still broken) handler
+    assert svc.executor._circuit_status()["flaky.circuit"] == "open"  # re-opened
+
+    # and it fails fast again without touching the handler
+    result = await svc.executor.execute(ctx, agent, "flaky.circuit", {})
+    assert "circuit open" in result["error"]
+    assert calls["n"] == 4
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_recovers_on_success(svc, monkeypatch):
+    """A successful call resets the circuit (closed) and clears the failure
+    count — a transiently broken tool recovers without intervention."""
+    import agentos.tools.executor as ex
+
+    monkeypatch.setattr(ex, "_CIRCUIT_FAIL_THRESHOLD", 2)
+    calls = {"n": 0}
+
+    async def flaky_ok(ctx, args):
+        calls["n"] += 1
+        return {"ok": calls["n"] > 2, "error": "" if calls["n"] > 2 else "down"}
+
+    await svc.tool_registry.register(
+        ToolDef(name="recover.circuit", description="flaky", risk_level="low"), flaky_ok)
+    agent = await svc.agent_registry.get("executive")
+    project = await svc.projects.create("circuit-recover", "t")
+    task = await svc.tasks.create(project.project_id, "t", "d")
+    ctx = svc.runtime(agent, task, project).ctx
+
+    # 2 failures open the circuit
+    await svc.executor.execute(ctx, agent, "recover.circuit", {})
+    await svc.executor.execute(ctx, agent, "recover.circuit", {})
+    assert svc.executor._circuit_status()["recover.circuit"] == "open"
+
+    # force cooldown expiry → half-open probe succeeds → circuit closes
+    # (a fully healthy tool has no circuit entry at all)
+    svc.executor._circuits["recover.circuit"]["open_until"] = 0
+    result = await svc.executor.execute(ctx, agent, "recover.circuit", {})
+    assert result["ok"]
+    assert "recover.circuit" not in svc.executor._circuit_status()
+
+    # and the next call is a normal (non-probe) execution
+    result = await svc.executor.execute(ctx, agent, "recover.circuit", {})
+    assert result["ok"]
+    assert calls["n"] == 4

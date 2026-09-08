@@ -28,6 +28,12 @@ from agentos.security.audit import AuditLog
 
 logger = logging.getLogger("agentos.tools")
 
+# Circuit breaker (tool health): after this many consecutive execution
+# failures a tool's circuit opens and calls fail fast for the cooldown
+# window, instead of hammering a broken backend on every attempt.
+_CIRCUIT_FAIL_THRESHOLD = 3
+_CIRCUIT_COOLDOWN_SECONDS = 60.0
+
 _SENSITIVE_KEYS = {"token", "key", "password", "secret", "api_key", "authorization", "cookie"}
 _WRITE_CMDS = __import__("re").compile(r"(;|&&|\|\||>|\brm\b|\bmv\b|\bmkdir\b|"
                                        r"curl\s+-X|git\s+push|git\s+commit|"
@@ -80,6 +86,49 @@ class ToolExecutor:
         self.tracer = tracer
         self.capabilities = capabilities
         self.retry_transient = retry_transient
+        # per-tool circuit state: {tool_name: {failures, open_until, half_open}}
+        self._circuits: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------
+    # Circuit breaker (tool health) — fail fast when a tool is broken
+    # ------------------------------------------------------------------
+    def _circuit_state(self, tool_name: str) -> str:
+        """closed | half_open | open — with automatic half-open probing once
+        the cooldown expires (first call through after cooldown is the probe)."""
+        circ = self._circuits.get(tool_name)
+        if circ is None:
+            return "closed"
+        if circ.get("half_open"):
+            return "half_open"
+        open_until = circ.get("open_until")
+        if open_until is None:
+            # counting failures toward the threshold, but never opened
+            return "closed"
+        if open_until <= time.monotonic():
+            circ["half_open"] = True  # first caller becomes the probe
+            return "half_open"
+        return "open"
+
+    def _record_failure(self, tool_name: str) -> None:
+        circ = self._circuits.setdefault(tool_name, {"failures": 0})
+        was_half_open = bool(circ.get("half_open"))
+        circ["failures"] = circ.get("failures", 0) + 1
+        circ["half_open"] = False
+        # a failed half-open probe re-opens the circuit immediately;
+        # otherwise the circuit opens once the failure threshold is hit
+        if was_half_open or circ["failures"] >= _CIRCUIT_FAIL_THRESHOLD:
+            circ["open_until"] = time.monotonic() + _CIRCUIT_COOLDOWN_SECONDS
+            circ["failures"] = 0
+            logger.warning("tool %s circuit OPEN for %.0fs (repeated failures)",
+                           tool_name, _CIRCUIT_COOLDOWN_SECONDS)
+
+    def _record_success(self, tool_name: str) -> None:
+        # a fully healthy tool has no circuit entry at all — "closed" is
+        # represented by absence, so a successful call clears the state
+        self._circuits.pop(tool_name, None)
+
+    def _circuit_status(self) -> dict:
+        return {name: self._circuit_state(name) for name in self._circuits}
 
     # ------------------------------------------------------------------
     # Execution
@@ -169,6 +218,19 @@ class ToolExecutor:
                         "error": f"tool {tool_name} requires human approval "
                                  f"({approval.approval_id}) — awaiting decision"}
 
+        # circuit breaker: fail fast while a tool's circuit is open, probe
+        # exactly once after cooldown (half-open), and reset on success.
+        # Permission/approval denials do NOT count as tool failures — only
+        # actual execution failures move the circuit.
+        state = self._circuit_state(tool_name)
+        if state == "open":
+            await self._audit(ctx, agent, tool_name, "tool.circuit_open", "denied",
+                              {"reason": "repeated failures; retry later"})
+            return {"ok": False, "error": (
+                f"tool {tool_name} is unavailable (circuit open after repeated "
+                f"failures) — retry in ~{_CIRCUIT_COOLDOWN_SECONDS:.0f}s or use "
+                f"a different tool")}
+
         handler = self.tools.handler(tool_name)
         if handler is None:
             return {"ok": False, "error": f"no handler registered for {tool_name}"}
@@ -214,6 +276,11 @@ class ToolExecutor:
         start = time.perf_counter()
         result = await self._call_with_retries(handler, ctx, args, tool_name, timeout)
         latency_ms = int((time.perf_counter() - start) * 1000)
+        # update circuit health from actual execution outcome
+        if result.get("ok"):
+            self._record_success(tool_name)
+        elif not result.get("pending_approval"):
+            self._record_failure(tool_name)
         if span_ctx is not None:
             span.latency_ms = latency_ms
             span.status = "ok" if result.get("ok") else "error"
