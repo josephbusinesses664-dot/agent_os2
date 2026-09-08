@@ -82,6 +82,7 @@ class Services:
     performance: PerformanceTracker = None  # type: ignore[assignment]
     evaluation: BenchmarkRunner = None  # type: ignore[assignment]
     planner: DynamicPlanner = None  # type: ignore[assignment]
+    scheduler: Any = None  # SchedulerService — recurring/standing missions
 
     mattermost: Any = None
     web_search: Any = None
@@ -170,6 +171,9 @@ class Services:
         self.evaluation = BenchmarkRunner(self, use_judge=True,
                                           judge_tier=self.settings.eval_judge_tier)
         self.planner = DynamicPlanner()
+        from agentos.orchestration.scheduler import SchedulerService
+        self.scheduler = SchedulerService(self.entity_store,
+                                          event_bus=self.events, locks=self.locks)
 
     async def seed(self) -> dict[str, int]:
         """Populate default registries (idempotent)."""

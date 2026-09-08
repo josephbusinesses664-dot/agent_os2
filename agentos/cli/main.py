@@ -607,6 +607,74 @@ def workspace(action: str = typer.Argument(..., help="list | show | isolate | st
 
 
 @app.command()
+def schedule(action: str = typer.Argument(..., help="list | create | pause | resume | delete | run"),
+              schedule_id: Optional[str] = typer.Argument(None),
+              name: Optional[str] = typer.Option(None, "--name"),
+              goal: Optional[str] = typer.Option(None, "--goal"),
+              interval: Optional[int] = typer.Option(None, "--interval",
+                                                     help="seconds between fires (default daily)"),
+              workflow: Optional[str] = typer.Option(None, "--workflow",
+                                                     help="pin a workflow; default = dynamic plan"),
+              max_runs: Optional[int] = typer.Option(None, "--max-runs",
+                                                     help="auto-disable after N fires (1 = one-shot)")):
+    """Recurring / standing missions.
+    Actions: list | create | pause | resume | delete | run."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            rows = await svc.scheduler.list()
+            if not rows:
+                typer.echo("(no schedules — create one with `agent-os schedule create`)")
+                return
+            for s in rows:
+                state = "✅" if s.enabled else "⏸"
+                typer.echo(f"{state} {s.schedule_id:<18} {s.name:<28} "
+                           f"every {s.interval_seconds}s  next {s.next_run_at:%m-%d %H:%M}  "
+                           f"runs {s.run_count}"
+                           + (f"/{s.max_runs}" if s.max_runs else "")
+                           + (f"  [{s.last_status}]" if s.last_status else ""))
+            return
+        if action == "create":
+            if not name or not goal:
+                typer.echo("usage: agent-os schedule create --name 'Weekly Research' "
+                           "--goal 'Research the church-management market' "
+                           "[--interval 604800] [--workflow discovery] [--max-runs 1]")
+                return
+            s = await svc.scheduler.create(
+                name, goal, interval_seconds=interval or 86400,
+                workflow_id=workflow, max_runs=max_runs)
+            typer.echo(f"✅ schedule {s.schedule_id} created — first fire "
+                       f"{s.next_run_at:%Y-%m-%d %H:%M:%S UTC}, every "
+                       f"{s.interval_seconds}s")
+            return
+        if action in ("pause", "resume"):
+            s = await svc.scheduler.set_enabled(schedule_id or "",
+                                                enabled=(action == "resume"))
+            if not s:
+                typer.echo("schedule not found")
+                return
+            typer.echo(f"{'resumed' if action == 'resume' else 'paused'} {s.schedule_id}")
+            return
+        if action == "delete":
+            if await svc.scheduler.delete(schedule_id or ""):
+                typer.echo(f"deleted {schedule_id}")
+            else:
+                typer.echo("schedule not found")
+            return
+        if action == "run":
+            if not schedule_id:
+                typer.echo("usage: agent-os schedule run <schedule_id>")
+                return
+            s = await svc.scheduler.require(schedule_id)
+            result = await svc.engine.fire_schedule(s)
+            typer.echo(json.dumps(result, indent=2, default=str))
+            return
+        typer.echo("usage: agent-os schedule list|create|pause|resume|delete|run")
+
+    _run(_main())
+
+
+@app.command()
 def memory(limit: int = typer.Option(30, "--limit")):
     """List persisted memory entries."""
     async def _main():

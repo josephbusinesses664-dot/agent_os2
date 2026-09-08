@@ -28,7 +28,7 @@ Tables (per collection):
     traces(span_id)  workflows(workflow_id)  workspaces(workspace_id,
               project_id → projects.id, task_id → tasks.id, agent_id → agents.id)
     checkpoints(thread_id, ns, checkpoint_id)  checkpoint_latest(thread_id)
-    policy_control(key)
+    policy_control(key)  schedules(schedule_id, project_id → projects.id)
 
 Design notes:
 - Every table keeps the full aggregate payload in a JSONB `data` column so
@@ -114,6 +114,8 @@ SCHEMA: dict[str, dict[str, Any]] = {
     "checkpoints": {"table": "checkpoints", "keys": ["thread_id", "checkpoint_ns", "checkpoint_id"]},
     "checkpoint_latest": {"table": "checkpoint_latest", "keys": ["thread_id"]},
     "policy_control": {"table": "policy_control", "keys": ["key"]},
+    "schedules": {"table": "schedules", "keys": ["schedule_id"],
+                  "fks": {"project_id": ("projects", "project_id")}},
 }
 
 

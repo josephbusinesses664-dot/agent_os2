@@ -130,6 +130,47 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+# ---------------------------------------------------------------------------
+# Schedules (recurring / standing missions — Phase 3 scheduling)
+# ---------------------------------------------------------------------------
+
+class Schedule(BaseModel):
+    """A recurring (or one-shot) mission: when `next_run_at` passes, the
+    scheduler fires the goal through the engine under a distributed lock so
+    only one worker launches each occurrence.
+
+    Fires are claimed (state advanced) *before* launch, so a crash between
+    claim and launch never double-fires the same occurrence; the mission
+    itself runs through the durable workflow engine.
+    """
+
+    schedule_id: str
+    name: str
+    goal: str                    # objective executed on each fire
+    workflow_id: Optional[str] = None  # None => dynamic (planner-picked) plan
+    project_id: Optional[str] = None   # recurring project target (optional)
+    user_id: str = "human"
+    interval_seconds: int = 86400      # default: daily
+    next_run_at: datetime = Field(default_factory=utcnow)
+    last_run_at: Optional[datetime] = None
+    run_count: int = 0
+    max_runs: Optional[int] = None     # auto-disable after N fires
+    enabled: bool = True
+    last_status: str = ""              # pending | running | ok | failed | skipped
+    last_run_id: Optional[str] = None
+    last_error: Optional[str] = None
+    created_by: str = "human"
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def is_one_shot(self) -> bool:
+        return self.max_runs is not None and self.max_runs <= 1
+
+    def touch(self) -> None:
+        self.updated_at = utcnow()
+
+
 class Task(BaseModel):
     task_id: str
     project_id: str

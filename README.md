@@ -108,6 +108,7 @@ agent-os approvals list | approve | reject
 agent-os policy list | evaluate     # hard security policies (above the hierarchy)
 agent-os emergency status | engage | disengage   # human-only global stop
 agent-os workspace list | isolate | integrate | discard   # isolated worktrees
+agent-os schedule list | create | pause | resume | run   # recurring/standing missions
 agent-os events | audit | memory
 agent-os evaluate basic       # benchmark a regression dataset
 agent-os leaderboard          # agent performance leaderboard

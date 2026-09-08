@@ -25,6 +25,7 @@ from agentos.domain.models import (
     ModelDef,
     PerformanceStats,
     Project,
+    Schedule,
     SkillDef,
     Task,
     ToolDef,
@@ -65,6 +66,7 @@ KEY_FIELDS: dict[type, tuple[str, ...]] = {
     WorkflowDef: ("workflow_id",),
     Budget: ("scope", "scope_id"),
     WorkspaceRecord: ("workspace_id",),
+    Schedule: ("schedule_id",),
 }
 
 

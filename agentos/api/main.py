@@ -71,6 +71,23 @@ class IntegrateRequest(BaseModel):
     operator: str = "human"
 
 
+class ScheduleCreate(BaseModel):
+    name: str
+    goal: str
+    interval_seconds: int = 86400
+    workflow_id: Optional[str] = None
+    project_id: Optional[str] = None
+    user_id: str = "human"
+    max_runs: Optional[int] = None
+    start_at: Optional[str] = None  # ISO datetime ("now" when omitted)
+
+
+class SchedulePatch(BaseModel):
+    enabled: Optional[bool] = None
+    interval_seconds: Optional[int] = None
+    max_runs: Optional[int] = None
+
+
 def create_app(svc: Any) -> FastAPI:
     if svc is not None:
         svc_holder["svc"] = svc
@@ -348,6 +365,52 @@ def create_app(svc: Any) -> FastAPI:
         ok = sum(1 for r in reports if r.get("status") == "ok")
         return {"status": "ok" if ok == len(reports) else "degraded",
                 "healthy": ok, "total": len(reports), "servers": reports}
+
+    # -- schedules (recurring / standing missions) ---------------------------
+    @app.get("/api/schedules")
+    async def list_schedules(enabled_only: bool = False):
+        return [s.model_dump(mode="json") for s in
+                await S().scheduler.list(enabled_only=enabled_only)]
+
+    @app.post("/api/schedules")
+    async def create_schedule(body: ScheduleCreate):
+        svc = S()
+        from datetime import datetime
+        start_at = datetime.fromisoformat(body.start_at) \
+            if body.start_at else None
+        schedule = await svc.scheduler.create(
+            body.name, body.goal, interval_seconds=body.interval_seconds,
+            workflow_id=body.workflow_id, project_id=body.project_id,
+            user_id=body.user_id, max_runs=body.max_runs,
+            start_at=start_at)
+        return schedule.model_dump(mode="json")
+
+    @app.patch("/api/schedules/{schedule_id}")
+    async def update_schedule(schedule_id: str, body: SchedulePatch):
+        svc = S()
+        schedule = await svc.scheduler.require(schedule_id)
+        if body.enabled is not None:
+            schedule.enabled = body.enabled
+        if body.interval_seconds is not None:
+            schedule.interval_seconds = max(1, body.interval_seconds)
+        if body.max_runs is not None:
+            schedule.max_runs = body.max_runs
+        await svc.scheduler.save(schedule)
+        return schedule.model_dump(mode="json")
+
+    @app.post("/api/schedules/{schedule_id}/run")
+    async def run_schedule_now(schedule_id: str):
+        """Fire a schedule immediately (manual trigger)."""
+        svc = S()
+        schedule = await svc.scheduler.require(schedule_id)
+        result = await svc.engine.fire_schedule(schedule)
+        return result
+
+    @app.delete("/api/schedules/{schedule_id}")
+    async def delete_schedule(schedule_id: str):
+        if not await S().scheduler.delete(schedule_id):
+            raise HTTPException(404, "schedule not found")
+        return {"deleted": schedule_id}
 
     # -- events / audit -----------------------------------------------------
     @app.get("/api/events")

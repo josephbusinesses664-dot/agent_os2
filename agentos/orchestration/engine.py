@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -59,6 +60,45 @@ class OrchestratorEngine:
         self._active_runs: dict[str, dict] = {}
         self._active_task_hashes: dict[str, str] = {}  # task hash -> task id
         self._parallel_count = 0
+        self._schedule_fires: dict[str, asyncio.Task] = {}  # in-flight missions
+
+    # ------------------------------------------------------------------
+    # Scheduling (Phase 3): recurring / standing missions
+    # ------------------------------------------------------------------
+    async def fire_schedule(self, schedule: Any) -> dict:
+        """Launch one scheduled mission: run the goal through the engine.
+
+        Reuses the exact durable path a human goal takes (dynamic planning or
+        a pinned workflow) so scheduled missions get checkpoints, delegation,
+        memory and Mattermost mirrors. New project per fire keeps mission
+        timelines clean and reconstructable. Duplicate fires of the same
+        schedule that are already in flight are refused (claim-before-launch
+        in the scheduler already prevents same-occurrence doubles; this guard
+        stops overlapping *different* occurrences when the interval is shorter
+        than the run)."""
+        existing = self._schedule_fires.get(schedule.schedule_id)
+        if existing is not None and not existing.done():
+            return {"status": "skipped", "reason": "already running",
+                    "schedule_id": schedule.schedule_id}
+        task = asyncio.create_task(self._run_schedule_goal(schedule))
+        self._schedule_fires[schedule.schedule_id] = task
+        try:
+            return await task
+        finally:
+            self._schedule_fires.pop(schedule.schedule_id, None)
+
+    async def _run_schedule_goal(self, schedule: Any) -> dict:
+        goal = schedule.goal or schedule.name
+        if schedule.workflow_id:
+            result = await self.execute_goal(
+                goal, user_id=schedule.user_id,
+                workflow_id=schedule.workflow_id)
+        else:
+            result = await self.execute_dynamic(
+                goal, user_id=schedule.user_id)
+        return {"run_id": result.get("run_id"),
+                "project_id": result.get("project_id"),
+                "status": result.get("status")}
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -749,12 +789,29 @@ class OrchestratorEngine:
         DB-status check below is a second, cheaper guard; the lock is the
         arbiter across processes. A task left enqueued after its owner dies
         (lock TTL expiry) is simply picked up by the next worker.
+
+        Also drives the scheduler (Phase 3): on a slow cadence it claims +
+        launches any due recurring/standing missions (distributed-lock
+        protected so only one worker fires each occurrence) and escalates
+        tasks that have passed their deadlines.
         """
         logger.info("worker started")
         owner = f"worker:{os.getpid()}"
+        scheduler = getattr(self.svc, "scheduler", None)
+        last_sched_check = 0.0
         while True:
             if stop_event and stop_event.is_set():
                 break
+            # scheduler pass (every ~10s, independent of queue load)
+            if scheduler is not None and time.monotonic() - last_sched_check >= 10.0:
+                last_sched_check = time.monotonic()
+                try:
+                    await scheduler.tick(fire_cb=self.fire_schedule, owner=owner)
+                    await scheduler.enforce_deadlines(
+                        self.svc.tasks, agent_registry=self.svc.agent_registry,
+                        messages=self.svc.messages)
+                except Exception:  # noqa: BLE001
+                    logger.exception("scheduler tick failed")
             item = await self.svc.queue.dequeue(timeout=1.0)
             if item is None:
                 continue
