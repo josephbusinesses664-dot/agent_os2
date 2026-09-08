@@ -48,6 +48,24 @@ agent-os workspace discard <ws_id>
 API: `GET/POST /api/workspaces`, `GET /api/workspaces/{id}`,
 `GET .../status`, `GET .../diff`, `POST .../integrate`, `POST .../discard`.
 
+## Orchestrator integration
+
+With `WORKSPACE_ISOLATION=true` (env `WORKSPACE_ISOLATION`), the workflow
+engine runs coding stages (`implement-frontend`, `implement-backend`,
+`testing`, `security`, `review`) inside an isolated workspace automatically:
+
+1. the stage agent executes with its **filesystem scoped to the worktree**, so
+   parallel stages never clobber each other,
+2. when the stage finishes, `integrate()` merges the work back to the project
+   repo (plain-dir projects are synced back into the shared workspace),
+3. a `workspace.merged` event records the merge — including on **failed**
+   stages, so a build that goes wrong never strands its work.
+
+The stage deliverable contract (HTML for build stages, planned `artifacts/*.md`
+for the rest) is enforced against the isolated workspace, so downstream stages
+and the deploy tooling always see the real files. Off by default — the
+orchestrator's shared-workspace path is unchanged until you opt in.
+
 ## The coding harness interface
 
 `agentos/workspaces/harness.py` defines the `CodingHarness` contract the
@@ -80,6 +98,8 @@ task), so existing workflows keep their semantics.
 `tests/test_workspaces.py` uses **real git repositories** and verifies:
 
 - worktree isolation + merge-back into the base repo,
+- orchestrator-level isolation: coding stages run in worktrees that merge
+  back, plain-dir projects sync back, and failed stages preserve their work,
 - two parallel worktrees editing different files merge cleanly,
 - a conflicting merge marks the workspace failed without losing either side's
   work,

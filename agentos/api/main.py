@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -81,6 +81,24 @@ def create_app(svc: Any) -> FastAPI:
         return svc_holder["svc"]
 
     app = FastAPI(title="Agent OS Control Plane", version="0.1.0")
+
+    # -- API auth gate (opt-in) ----------------------------------------------
+    # When API_AUTH_TOKEN is set, every /api/* route except /api/health
+    # requires `Authorization: Bearer <token>`. The admin UI and static assets
+    # stay open (they render inside the trusted network); the control plane
+    # protects the data.
+    @app.middleware("http")
+    async def api_auth_gate(request: Request, call_next):
+        svc = svc_holder.get("svc")
+        token = getattr(getattr(svc, "settings", None), "api_auth_token", None) \
+            if svc is not None else None
+        path = request.url.path
+        if token and path.startswith("/api/") and path != "/api/health":
+            auth = request.headers.get("authorization", "")
+            if auth != f"Bearer {token}":
+                return JSONResponse({"detail": "unauthorized — Bearer token required"},
+                                    status_code=401)
+        return await call_next(request)
 
     # -- health -------------------------------------------------------------
     @app.get("/api/health")
@@ -504,6 +522,46 @@ def create_app(svc: Any) -> FastAPI:
         if not result.get("ok"):
             raise HTTPException(409, result.get("error", "rollback failed"))
         return result
+
+    # -- mission timeline (observability / mission replay) --------------------
+    @app.get("/api/projects/{project_id}/timeline")
+    async def project_timeline(project_id: str):
+        """Reconstruct a mission: events + tasks + approvals + messages for a
+        project, merged chronologically — a failed run is reconstructable after
+        the fact."""
+        svc = S()
+        project = await svc.projects.get(project_id)
+        if not project:
+            raise HTTPException(404, "project not found")
+        items: list[dict] = []
+        for e in await svc.events.recent(limit=500):
+            if e.project_id == project_id:
+                items.append({"ts": e.ts, "kind": "event", "type": e.type,
+                              "severity": e.severity, "agent_id": e.agent_id,
+                              "detail": e.payload})
+        for t in await svc.tasks.by_project(project_id):
+            items.append({"ts": t.created_at, "kind": "task",
+                          "task_id": t.task_id, "title": t.title,
+                          "status": t.status.value, "agent": t.assigned_agent,
+                          "detail": {"error": t.error} if t.error else {}})
+        for a in await svc.approvals.all(limit=200):
+            if a.project_id == project_id:
+                items.append({"ts": a.created_at, "kind": "approval",
+                              "approval_id": a.approval_id, "action": a.action,
+                              "status": a.status.value, "agent": a.agent_id})
+        for m in await svc.messages.recent(limit=300):
+            if m.project_id == project_id:
+                items.append({"ts": m.created_at, "kind": "message",
+                              "type": m.message_type.value, "from": m.sender,
+                              "to": m.recipient, "detail": m.payload})
+        items.sort(key=lambda i: i["ts"])
+        return {
+            "project_id": project_id,
+            "objective": project.objective,
+            "status": project.status.value,
+            "count": len(items),
+            "timeline": [{**i, "ts": i["ts"].isoformat()} for i in items],
+        }
 
     # -- admin UI -----------------------------------------------------------
     static_dir = Path(__file__).resolve().parent.parent / "admin" / "static"

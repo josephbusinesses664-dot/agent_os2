@@ -9,9 +9,9 @@
 # stop is a live control, and only humans can flip it
 # (`agent-os emergency engage "reason"` / `agent-os emergency disengage`).
 #
-# The defaults below are baked into the platform (agentos/security/policy.py)
-# and cannot be changed here. This file only ADDS policies, or explicitly
-# disables a baked-in default by id:
+# The baked-in defaults live in agentos/security/policy.py (production-gated)
+# and cannot be changed here. This file ADDS policies, or explicitly disables
+# a baked-in default by id:
 #
 #   disabled: [prod-db-writes-forbidden]
 #
@@ -32,36 +32,39 @@
 # ===========================================================================
 
 security_policies:
-  # Example: destructive repository operations are always human-approved,
-  # even for a senior engineer who normally holds git permissions.
-  # - id: destructive-git-human-approval
-  #   kind: require_approval
-  #   description: Force-pushing or rewriting shared git history requires
-  #     explicit human approval for every agent.
-  #   tools: [github]
-  #   arg_pattern: "(?i)(force|push --force|reset --hard|rebase)"
-  #   approval_risk: high
-  #   reason: rewriting shared git history requires human approval
+  # Browser automation may never drive authentication, payment or admin flows.
+  # Agents can research with the browser, but login/checkout/password/admin
+  # interactions are off-limits for every agent, in every environment.
+  - id: browser-never-authenticate
+    kind: deny_tool
+    description: Agents may research with the browser but may never drive
+      login, sign-in, password, checkout, payment or admin flows.
+    tools: [browser.click, browser.type, browser.evaluate]
+    arg_pattern: "(?i)(login|signin|sign-in|log-in|password|checkout|payment|admin|dashboard)"
+    reason: browser authentication, payment and admin flows are off-limits
+      for agents (hard security policy)
 
-  # Example: browser automation may never submit payment or auth forms.
-  # - id: browser-never-authenticate
-  #   kind: deny_tool
-  #   description: Agents may research with the browser but may never drive
-  #     login/checkout flows.
-  #   tools: [browser.click, browser.type, browser.evaluate]
-  #   arg_pattern: "(?i)(login|signin|sign-in|password|checkout|pay)"
-  #   reason: browser authentication and payment flows are off-limits
+  # Destructive repository operations are always human-approved, even for a
+  # senior engineer who normally holds git permissions.
+  - id: destructive-git-human-approval
+    kind: require_approval
+    description: Force-pushing or rewriting shared git history requires
+      explicit human approval for every agent.
+    tools: [github]
+    arg_pattern: "(?i)(force|push --force|reset --hard|rebase|filter-branch)"
+    approval_risk: high
+    reason: rewriting shared git history requires human approval (hard policy)
 
-  # Example: in production, external API calls default to read-only by
-  # coercing api.call into the read-only scope.
-  # - id: prod-api-readonly
-  #   kind: restrict_scope
-  #   description: Production api.call invocations run read-only unless a
-  #     human approval grants write scope.
-  #   tools: [api.call]
-  #   environments: [production]
-  #   scope: read-only
-  #   reason: production external calls are restricted to read-only
+  # In production, external API calls default to read-only by coercing
+  # api.call into the read-only scope.
+  - id: prod-api-readonly
+    kind: restrict_scope
+    description: Production api.call invocations run read-only unless a
+      human approval grants write scope.
+    tools: [api.call]
+    environments: [production]
+    scope: read-only
+    reason: production external calls are restricted to read-only (hard policy)
 
 # Disabled baked-in defaults (logged loudly at boot):
 # disabled: []

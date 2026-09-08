@@ -46,10 +46,18 @@ Shipped in `agentos/security/policy.py`, enforced in **production**:
 | `prod-db-writes-forbidden` | deny_tool | `postgres.query` calls in production whose args contain `insert/update/delete/drop/alter/truncate/grant/revoke/create` are refused outright |
 | `no-credential-extraction` | deny_tool | `shell`/`api.call`/`web.scrape`/`github` in production may not carry credential-shaped arguments |
 
+Enabled from `config/policies.yaml` (can be extended there):
+
+| Policy | Kind | Effect |
+|---|---|---|
+| `browser-never-authenticate` | deny_tool | Agents may research with the browser but never drive login / sign-in / password / checkout / payment / admin flows (`browser.click` / `browser.type` / `browser.evaluate`) |
+| `destructive-git-human-approval` | require_approval | Force-pushing or rewriting shared git history via `github` always needs a human — even for the CTO |
+| `prod-api-readonly` | restrict_scope | Production `api.call` invocations are coerced into the read-only scope |
+
 They are deliberately gated to `production` so development/offline work is
 unaffected. They cannot be changed at runtime.
 
-## Adding policies — `config/policies.yaml`
+## Adding policies — `config/policies.yaml` (three are already enabled by default)
 
 Extend the platform with your own immutable rules:
 

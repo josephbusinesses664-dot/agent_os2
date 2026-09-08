@@ -65,7 +65,7 @@ I want to build a new SaaS product.            → executive creates a project
 
 | Subsystem | Where | Notes |
 |---|---|---|
-| Control plane API + admin UI | `agentos/api/`, `agentos/admin/` | FastAPI, single-file SPA |
+| Control plane API + admin UI | `agentos/api/`, `agentos/admin/` | FastAPI, single-file SPA, opt-in Bearer auth (`API_AUTH_TOKEN`), mission timeline per project |
 | Orchestration | `agentos/orchestration/` | LangGraph state machine, checkpoints, retries, approval gates |
 | Agent runtime | `agentos/agents/` | observe → plan → act → **verify** → recover loop, inbox-fed context, auto memory, tracing, per-run browser session |
 | Agent registry | `agentos/registries/agent_registry.py` | 41 agents in a hierarchical org chart |
@@ -76,7 +76,7 @@ I want to build a new SaaS product.            → executive creates a project
 | Budgets | `agentos/budgets/` | global/project/agent/task limits, auto-downgrade |
 | Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | capability discovery, **default-deny permissions**, strategy-change retries, timeouts, health checks, MCP lifecycle + credential isolation |
 | Hard security policies | `agentos/security/policy.py` + `config/policies.yaml` | **policies always override the hierarchy**: evaluated before agent permissions (deny / forced human approval / scope coercion), emergency stop that refuses every tool call until a human stands down |
-| Isolated workspaces | `agentos/workspaces/` | per-task **git worktrees** for parallel engineering: isolate → work → integrate (merge back) → discard, plus a coding-harness interface for future runtimes |
+| Isolated workspaces | `agentos/workspaces/` | per-task **git worktrees** for parallel engineering: isolate → work → integrate (merge back) → discard, a coding-harness interface for future runtimes, and `WORKSPACE_ISOLATION=true` to run coding stages inside worktrees from the orchestrator |
 | Browser | `agentos/integrations/browser.py` | Playwright-powered automation (open/snapshot/click/type/evaluate/screenshot) through the executor + permission system |
 | Adapters | `agentos/tools/builtin.py` | read-only GitHub, Postgres, Docker adapters (technically enforced, approval-gated) |
 | Memory | `agentos/memory/` | layered memory (task/project/agent/org/user) with TF-IDF semantic recall, **knowledge-graph links**, **contradiction resolution**, versioned + temporal facts, provenance, consolidation |
@@ -105,9 +105,6 @@ agent-os mcp list | register
 agent-os apis list
 agent-os workflows list | run
 agent-os approvals list | approve | reject
-agent-os policy list | evaluate     # hard security policies (above the hierarchy)
-agent-os emergency status | engage | disengage   # human-only global stop
-agent-os workspace list | isolate | integrate | discard   # isolated worktrees
 agent-os policy list | evaluate     # hard security policies (above the hierarchy)
 agent-os emergency status | engage | disengage   # human-only global stop
 agent-os workspace list | isolate | integrate | discard   # isolated worktrees

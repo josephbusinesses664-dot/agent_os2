@@ -22,8 +22,16 @@ async def test_default_policies_loaded(svc):
     assert "prod-deploy-human-approval" in ids
     assert "prod-db-writes-forbidden" in ids
     assert "no-credential-extraction" in ids
-    # all defaults are production-gated so development work is unaffected
-    assert all(p.environments == ["production"] for p in policies)
+    # baked-in defaults are production-gated so development work is unaffected
+    baked = [p for p in policies if p.id in (
+        "prod-deploy-human-approval", "prod-db-writes-forbidden",
+        "no-credential-extraction")]
+    assert all(p.environments == ["production"] for p in baked)
+    # the yaml-enabled hardenings are active: browser auth denial,
+    # destructive-git approval, prod api read-only scope
+    for expected in ("browser-never-authenticate", "destructive-git-human-approval",
+                     "prod-api-readonly"):
+        assert expected in ids, f"missing yaml policy {expected}"
 
 
 @pytest.mark.asyncio
@@ -115,6 +123,48 @@ async def test_yaml_adds_and_disables_policies(svc, tmp_path):
     assert "custom-deny" in ids
     assert "no-credential-extraction" not in ids  # explicitly disabled
     assert "prod-db-writes-forbidden" in ids       # defaults still enforced
+
+
+@pytest.mark.asyncio
+async def test_browser_auth_policy_denies_login_flows(svc):
+    executive = await svc.agent_registry.get("executive")
+    decision = await svc.policy.evaluate(
+        executive, "browser.type",
+        {"selector": "#user", "text": "admin"})
+    assert not decision.allowed
+    assert decision.policy_id == "browser-never-authenticate"
+    # ordinary research interactions stay allowed
+    decision = await svc.policy.evaluate(executive, "browser.click",
+                                         {"selector": "#go"})
+    assert decision.allowed
+
+
+@pytest.mark.asyncio
+async def test_destructive_git_requires_human_approval(svc):
+    cto = await svc.agent_registry.get("cto")
+    # ordinary read-only github calls are unaffected
+    decision = await svc.policy.evaluate(cto, "github",
+                                         {"action": "get_repo", "repo": "a/b"})
+    assert decision.allowed and decision.action == "allow"
+    # rewriting history forces the human gate, even for the CTO
+    decision = await svc.policy.evaluate(
+        cto, "github", {"action": "push", "force": "true"})
+    assert decision.allowed is True
+    assert decision.action == "require_approval"
+    assert decision.policy_id == "destructive-git-human-approval"
+
+
+@pytest.mark.asyncio
+async def test_prod_api_readonly_restricts_scope(svc):
+    cto = await svc.agent_registry.get("cto")
+    decision = await svc.policy.evaluate(cto, "api.call", {"api": "stripe"},
+                                         environment="production")
+    assert decision.action == "restrict_scope"
+    assert decision.scope == "read-only"
+    # development api calls are untouched
+    decision = await svc.policy.evaluate(cto, "api.call", {"api": "stripe"},
+                                         environment="development")
+    assert decision.action == "allow"
 
 
 @pytest.mark.asyncio

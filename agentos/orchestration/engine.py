@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from agentos.agents.runtime import AgentRunResult
@@ -38,6 +39,12 @@ from agentos.services import Services
 logger = logging.getLogger("agentos.engine")
 
 TRANSIENT_CLASSES = {"transient", "provider"}
+
+# Coding stages run in their own isolated git worktree when
+# WORKSPACE_ISOLATION=true — the deliverable merges back to the project
+# workspace after the stage finishes.
+_ISOLATED_STAGES = {"implement-frontend", "implement-backend", "testing",
+                    "security", "review"}
 
 
 class SpawnLimitError(Exception):
@@ -282,13 +289,35 @@ class OrchestratorEngine:
     # ------------------------------------------------------------------
     async def execute_stage_work(self, workflow: WorkflowDef, stage: WorkflowStage,
                                  project: Project, run_id: str) -> StageResult:
-        """Instantiate the stage's agent and run the stage's task."""
+        """Instantiate the stage's agent and run the stage's task.
+
+        With WORKSPACE_ISOLATION=true, coding stages execute inside their own
+        git worktree cut from the project workspace; the work merges back to
+        the base branch when the stage finishes (plain-dir projects are
+        synced back instead). Failures never lose the worktree contents.
+        """
         result = StageResult(stage_id=stage.stage_id, agent_id=stage.agent_role)
         agent = await self.svc.agent_registry.get(stage.agent_role)
         if agent is None or not agent.enabled:
             result.status = "failed"
             result.error = f"stage agent {stage.agent_role} unavailable"
             return result
+
+        # -- isolated workspace for coding stages (opt-in) --------------------
+        canonical = self.svc.workspace / project.project_id
+        workspace_root = canonical
+        record = None
+        if getattr(self.svc.settings, "workspace_isolation", False) \
+                and stage.stage_id in _ISOLATED_STAGES:
+            try:
+                record = await self.svc.workspaces.isolate(
+                    project.project_id, task_id="", agent_id=stage.agent_role,
+                    repo_path=str(canonical))
+                workspace_root = Path(record.worktree_path)
+            except Exception:  # noqa: BLE001
+                logger.exception("workspace isolation failed for stage %s — "
+                                 "running in the shared workspace", stage.stage_id)
+                record = None
 
         description = stage.description or f"Execute workflow stage {stage.name}."
         # on retries, tell the agent its previous approach failed
@@ -326,7 +355,7 @@ class OrchestratorEngine:
                 agent_id=agent.id, task_id=task.task_id,
                 project_id=project.project_id, payload={"workflow": workflow.workflow_id})
             span = await span_cm.__aenter__()
-        run = self.svc.runtime(agent, task, project)
+        run = self.svc.runtime(agent, task, project, workspace_path=workspace_root)
         outcome = await run.run(task)
         result.model = outcome.model
         result.cost = outcome.cost
@@ -352,7 +381,7 @@ class OrchestratorEngine:
             html = m.group(1) if m else ""
             if html:
                 try:
-                    target = self.svc.workspace / project.project_id / filename
+                    target = workspace_root / filename
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(html)
                 except Exception:  # noqa: BLE001
@@ -360,7 +389,7 @@ class OrchestratorEngine:
             else:
                 # the model may have written the file directly instead —
                 # a real deliverable on disk satisfies the contract
-                on_disk = self.svc.workspace / project.project_id / filename
+                on_disk = workspace_root / filename
                 if on_disk.exists() and on_disk.stat().st_size > 2000:
                     result.artifacts.append(filename)
                 elif result.status == "completed":
@@ -405,8 +434,7 @@ class OrchestratorEngine:
         # run always ships the planned files. Never overwrites real work.
         if stage.artifact_prefix:
             try:
-                artifact_target = (self.svc.workspace / project.project_id /
-                                   stage.artifact_prefix)
+                artifact_target = workspace_root / stage.artifact_prefix
                 stub = (not artifact_target.exists()
                         or artifact_target.stat().st_size < 200)
                 if stub and (outcome.content or "").strip():
@@ -423,6 +451,31 @@ class OrchestratorEngine:
             await self.svc.tasks.record_artifact(task.task_id, artifact)
             await self.svc.projects.add_artifact(project.project_id, artifact)
         await self._record_usage(task, outcome)
+
+        # -- merge the isolated workspace back (never lose the work) ----------
+        if record is not None:
+            try:
+                merge = await self.svc.workspaces.integrate(record.workspace_id,
+                                                            operator=agent.id)
+                if record.mode == "plain":
+                    # plain sandboxes have no git merge: sync the deliverables
+                    # into the canonical project workspace so downstream stages
+                    # and the deploy tooling still see them
+                    import shutil
+
+                    if Path(record.worktree_path).exists():
+                        shutil.copytree(record.worktree_path, canonical,
+                                        dirs_exist_ok=True)
+                await self.svc.events.publish(
+                    "workspace.merged",
+                    {"workspace": record.workspace_id, "stage": stage.stage_id,
+                     "mode": record.mode, "merged": merge.get("merged", False),
+                     "commits": merge.get("commits", []),
+                     "note": merge.get("note", "")},
+                    project_id=project.project_id, task_id=task.task_id,
+                    agent_id=agent.id)
+            except Exception:  # noqa: BLE001
+                logger.exception("workspace merge failed for %s", record.workspace_id)
 
         # every stage outcome gets evaluated (deterministic) + recorded
         try:
@@ -462,6 +515,18 @@ class OrchestratorEngine:
             await self.svc.agent_registry.set_status(agent.id, AgentStatus.BLOCKED,
                                                      task_id=task.task_id,
                                                      error=outcome.error)
+            return result
+
+        if result.error:
+            # contract enforcement already marked this stage failed
+            # (e.g. a build stage without its deliverable) — never let the
+            # tail clobber that back to "completed"
+            result.status = "failed"
+            await self.svc.tasks.set_status(task.task_id, TaskStatus.FAILED,
+                                            error=result.error)
+            await self.svc.agent_registry.set_status(
+                agent.id, AgentStatus.FAILED, task_id=task.task_id,
+                project_id=project.project_id, error=result.error)
             return result
 
         result.status = "completed"

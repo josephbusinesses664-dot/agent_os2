@@ -30,6 +30,8 @@ security:
   require_approval_risk: high
   sandboxed_workspace: true
   audit_every_tool_call: true
+  workspace_isolation: false   # coding stages in isolated git worktrees (WORKSPACE_ISOLATION)
+  api_auth_token: ""          # when set, the control-plane API requires Bearer auth
 
 observability:
   events_persisted: true

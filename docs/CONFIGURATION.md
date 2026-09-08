@@ -11,6 +11,7 @@ variable; this page explains the important ones.
 | `DATABASE_URL` | *(empty → in-memory)* | `postgresql+asyncpg://user:pass@host:5432/db`. Persistent store for all aggregates. |
 | `REDIS_URL` | *(empty → in-memory)* | `redis://host:6379/0`. Task queue, counters, cache. |
 | `WORKSPACE_DIR` | `./workspace` | Sandboxed file area for agents; path escapes are blocked and every write is audit-logged. |
+| `WORKSPACE_ISOLATION` | `false` | When true, coding stages (`implement-frontend`, `implement-backend`, `testing`, `security`, `review`) execute in their own **git worktree** cut from the project workspace; the work merges back when the stage finishes. Plain-dir projects are synced back instead. |
 
 ## Mattermost
 
@@ -21,6 +22,18 @@ variable; this page explains the important ones.
 | `MATTERMOST_TEAM` | Team the bot manages (`ai-agency` by default; created if missing). |
 | `MATTERMOST_POLL_INTERVAL` | Listener polling interval in seconds. |
 | `ADMIN_USER_IDS` | Comma-separated Mattermost user ids granted override power. |
+
+## Control-plane API
+
+| Var | Purpose |
+|---|---|
+| `API_AUTH_TOKEN` | *(empty → open)* When set, every `/api/*` route except `/api/health` requires `Authorization: Bearer <token>`. The admin UI and static assets stay open. |
+
+## Security
+
+| Var | Purpose |
+|---|---|
+| `SECURITY_POLICIES_FILE` | `./config/policies.yaml` | Extra hard security policies (always above the hierarchy); baked-in defaults cannot be changed here. See [SECURITY-POLICIES.md](SECURITY-POLICIES.md). |
 
 ## Model providers
 
