@@ -61,6 +61,7 @@ implement-frontend:
     single self-contained page with inline CSS and any JavaScript it needs,
     selling the product from the mission — polished hero, features,
     how-it-works, CTA. Nothing but the HTML in your final answer.
+    MAX_TOKENS: 16000
     PLANNED_TOOL_CALLS: []
 
 implement-backend:
@@ -80,6 +81,7 @@ implement-backend:
     and several AI agents collaborate on one goal: people typing, agents
     responding, work being delegated, artifacts appearing. Make it feel
     alive. Nothing but the HTML in your final answer.
+    MAX_TOKENS: 16000
     PLANNED_TOOL_CALLS: []
 
 testing:
