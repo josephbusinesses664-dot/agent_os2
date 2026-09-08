@@ -69,8 +69,9 @@ services:
         condition: service_healthy
     # the Dockerfile HEALTHCHECK probes the API port, which the worker does
     # not serve — override it so the worker reports healthy while alive
+    # (pgrep is absent in the slim image; check /proc for the worker process)
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f agentos.worker || exit 1"]
+      test: ["CMD-SHELL", "grep -q agentos.worker /proc/*/cmdline 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 20s
