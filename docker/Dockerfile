@@ -3,7 +3,9 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_RETRIES=5 \
+    PIP_TIMEOUT=60
 
 WORKDIR /app
 
@@ -16,7 +18,7 @@ COPY workflows ./workflows
 COPY prompts ./prompts
 COPY docker ./docker
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --retries 5 --timeout 60 .
 
 EXPOSE 8300
 
