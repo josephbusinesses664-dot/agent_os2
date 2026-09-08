@@ -119,6 +119,9 @@
   .st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
   .st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
   .st.working::before { background: var(--green); box-shadow: 0 0 8px rgba(56,211,159,.6); }
+  .st.isolated::before { background: var(--accent); }
+  .st.merged::before { background: var(--green); }
+  .st.discarded::before { background: var(--orange); }
   .st.idle::before { background: var(--text-faint); }
   .st.awaiting_review::before, .st.awaiting_approval::before { background: var(--yellow); }
   .st.blocked::before { background: var(--orange); }
@@ -180,6 +183,7 @@
   <a href="#agents" data-view="agents">Agents</a>
   <a href="#tasks" data-view="tasks">Tasks</a>
   <a href="#projects" data-view="projects">Projects</a>
+  <a href="#workspaces" data-view="workspaces">Workspaces</a>
   <div class="section">Capabilities</div>
   <a href="#skills" data-view="skills">Skills</a>
   <a href="#models" data-view="models">Models</a>
@@ -188,6 +192,8 @@
   <div class="section">Governance</div>
   <a href="#control" data-view="control">Control Plane</a>
   <a href="#approvals" data-view="approvals">Approvals</a>
+  <a href="#security" data-view="security">Security</a>
+  <a href="#timeline" data-view="timeline">Mission Timeline</a>
   <a href="#events" data-view="events">Events</a>
   <a href="#audit" data-view="audit">Audit Log</a>
   <div class="foot">v0.1.0 · prem-ium.inc</div>
@@ -314,6 +320,40 @@
     <div class="sub">Mutating actions are recorded with a compensation. Newest first. Rollback is idempotent.</div>
     <div class="table-wrap" id="rollback-table"></div>
   </section>
+
+  <!-- SECURITY (policies + emergency stop) -->
+  <section class="view" id="view-security">
+    <h2>Emergency stop</h2>
+    <div class="card" id="emergency-card"></div>
+    <h2>Hard security policies</h2>
+    <div class="sub">Policies are evaluated on every tool call BEFORE agent permissions — the hierarchy cannot override them. First match wins.</div>
+    <div class="table-wrap" id="policies-table"></div>
+  </section>
+
+  <!-- MISSION TIMELINE -->
+  <section class="view" id="view-timeline">
+    <div class="filters">
+      <select id="timeline-project" onchange="loadTimeline()"><option value="">select a project…</option></select>
+      <span class="pill" id="timeline-count"></span>
+    </div>
+    <div class="sub" id="timeline-sub"></div>
+    <div class="feed" id="timeline-feed" style="max-height:70vh"></div>
+  </section>
+
+  <!-- WORKSPACES (isolated worktrees) -->
+  <section class="view" id="view-workspaces">
+    <div class="card">
+      <div class="sub" style="margin:0 0 8px">Isolate a task's work in its own git worktree (or sandbox dir for non-repo projects). Integrate merges it back.</div>
+      <div class="btn-row" style="flex-wrap:wrap">
+        <select id="ws-project" style="min-width:180px"><option value="">project…</option></select>
+        <input type="text" id="ws-task" placeholder="task_id (optional)" style="width:130px">
+        <input type="text" id="ws-agent" placeholder="agent_id (optional)" style="width:130px">
+        <input type="text" id="ws-repo" placeholder="repo_path (optional)" style="width:180px">
+        <button class="btn" onclick="createWorkspace()">Isolate workspace</button>
+      </div>
+    </div>
+    <div class="table-wrap" id="workspaces-table"></div>
+  </section>
 </main>
 
 <script>
@@ -323,7 +363,7 @@ const time = ts => { try { return new Date(ts).toLocaleString(); } catch { retur
 const money = n => "$" + Number(n || 0).toFixed(4);
 
 let API = "";
-let VIEWS = ["overview","health","agents","tasks","projects","skills","models","mcp","budget","control","approvals","events","audit"];
+let VIEWS = ["overview","health","agents","tasks","projects","workspaces","skills","models","mcp","budget","control","approvals","security","timeline","events","audit"];
 
 function showView(name) {
   document.querySelectorAll("section.view").forEach(s => s.classList.remove("active"));
@@ -339,8 +379,9 @@ window.addEventListener("hashchange", () => {
 
 function loadView(name) {
   ({overview: loadOverview, health: loadHealth, agents: loadAgents, tasks: loadTasks,
-    projects: loadProjects, skills: loadSkills, models: loadModels, mcp: loadMcp,
-    budget: loadBudget, control: loadControl, approvals: loadApprovals, events: loadEvents, audit: loadAudit})[name]?.();
+    projects: loadProjects, workspaces: loadWorkspaces, skills: loadSkills, models: loadModels, mcp: loadMcp,
+    budget: loadBudget, control: loadControl, approvals: loadApprovals, security: loadSecurity,
+    timeline: loadTimeline, events: loadEvents, audit: loadAudit})[name]?.();
 }
 
 async function get(path) {
@@ -629,6 +670,152 @@ async function loadAudit() {
       <td>${esc(e.action)}</td><td class="mono dim">${esc(e.tool || "—")}</td>
       <td><span class="st ${esc(e.result)}">${esc(e.result)}</span></td>
       <td class="dim">${esc((e.target||"").slice(0,60))}</td></tr>`).join("") + `</tbody></table>`;
+}
+
+// ---------- security (policies + emergency stop) ----------
+async function loadSecurity() {
+  try {
+    const [policies, em] = await Promise.all([get("/api/security/policies"), get("/api/security/emergency")]);
+    const engaged = em.engaged;
+    $("#emergency-card").innerHTML = `<div class="btn-row" style="justify-content:space-between;flex-wrap:wrap">
+      <div>
+        <span class="pill ${engaged ? 'bad' : 'ok'}" style="font-size:13px">${engaged ? '🛑 ENGAGED' : '✓ clear'}</span>
+        ${engaged ? `<span class="dim">by ${esc(em.operator)}${em.reason ? ' — ' + esc(em.reason) : ''} · ${esc(em.engaged_at || '')}</span>` : ""}
+        <div class="sub" style="margin-top:4px">Engaged: every tool call is refused for every agent — the hierarchy cannot lift it, only a human can.</div>
+      </div>
+      <div class="btn-row">
+        ${engaged
+          ? `<button class="btn green" onclick="emergency('disengage')">Disengage (human)</button>`
+          : `<button class="btn red" onclick="emergency('engage')">Engage emergency stop</button>`}
+      </div>
+    </div>`;
+    $("#policies-table").innerHTML = `<table><thead><tr><th>Id</th><th>Kind</th><th>Tools</th>
+      <th>Environments</th><th>Risk</th><th>State</th><th>Description</th></tr></thead><tbody>` +
+      policies.map(p => `<tr>
+        <td class="mono">${esc(p.id)}</td>
+        <td class="mono">${esc(p.kind)}</td>
+        <td class="mono dim">${esc((p.tools||[]).join(", ") || "all")}</td>
+        <td class="dim">${esc((p.environments||[]).join(", ") || "all")}</td>
+        <td>${esc(p.approval_risk || "—")}</td>
+        <td>${p.enabled ? '<span class="st completed">active</span>' : '<span class="st failed">disabled</span>'}${p.immutable ? ' <span class="faint">immutable</span>' : ''}</td>
+        <td class="dim">${esc(p.description.slice(0,90))}</td>
+      </tr>`).join("") + `</tbody></table>`;
+  } catch (err) {
+    $("#emergency-card").innerHTML = `<div class="sub">${esc(err.message)}</div>`;
+    $("#policies-table").innerHTML = `<div class="empty">policies unavailable</div>`;
+  }
+}
+
+async function emergency(mode) {
+  try {
+    if (mode === "engage") {
+      const reason = prompt("Reason for engaging the emergency stop (visible in the audit log):") || "";
+      await post("/api/security/emergency", {operator: "admin-ui", reason});
+    } else {
+      await fetch(API + "/api/security/emergency?operator=admin-ui", {method: "DELETE"});
+    }
+    loadSecurity();
+  } catch (e) { alert("emergency " + mode + " failed: " + e.message); }
+}
+
+// ---------- mission timeline ----------
+async function loadTimeline() {
+  try {
+    if (!$("#timeline-project").options.length) {
+      const projects = await get("/api/projects");
+      $("#timeline-project").innerHTML = `<option value="">select a project…</option>` +
+        projects.map(p => `<option value="${esc(p.project_id)}">${esc(p.name)} (${esc(p.project_id)})</option>`).join("");
+    }
+    const pid = $("#timeline-project").value;
+    if (!pid) { $("#timeline-feed").innerHTML = `<div class="empty">choose a project to replay its mission</div>`; $("#timeline-count").textContent = ""; return; }
+    const t = await get("/api/projects/" + pid + "/timeline");
+    $("#timeline-count").textContent = t.count + " events";
+    $("#timeline-sub").textContent = `${t.objective} — status: ${t.status}`;
+    const icons = {event: "⚙️", task: "📋", approval: "🛂", message: "💬"};
+    $("#timeline-feed").innerHTML = t.timeline.length === 0
+      ? `<div class="empty">no activity recorded yet</div>`
+      : t.timeline.map(i => `<div class="ev">
+          <span class="t">${time(i.ts)}</span>
+          <span class="ty">${icons[i.kind]} ${esc(i.kind)}</span>
+          ${i.type ? `<span class="msg">${esc(i.type)}</span>` : ""}
+          ${i.title ? `<span class="msg">${esc(i.title.slice(0,70))}</span>` : ""}
+          ${i.action ? `<span class="msg">${esc(i.action.slice(0,50))}</span>` : ""}
+          ${i.status ? `<span class="sev-${esc(i.status)}">${esc(i.status)}</span>` : ""}
+          <span class="msg dim">${esc(JSON.stringify(i.detail || {}).slice(0,90))}</span>
+        </div>`).join("");
+  } catch (err) { $("#timeline-feed").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+}
+
+// ---------- workspaces (isolated worktrees) ----------
+async function loadWorkspaces() {
+  try {
+    if (!$("#ws-project").options.length) {
+      const projects = await get("/api/projects");
+      $("#ws-project").innerHTML = `<option value="">project…</option>` +
+        projects.map(p => `<option value="${esc(p.project_id)}">${esc(p.name)}</option>`).join("");
+    }
+    const rows = await get("/api/workspaces");
+    $("#workspaces-table").innerHTML = rows.length === 0 ? `<div class="empty">no isolated workspaces</div>` :
+      `<table><thead><tr><th>Id</th><th>Project</th><th>Task</th><th>Agent</th><th>Mode</th>
+       <th>Branch</th><th>Status</th><th>Commits</th><th>Actions</th></tr></thead><tbody>` +
+      rows.map(w => `<tr>
+        <td class="mono">${esc(w.workspace_id)}</td>
+        <td class="mono dim">${esc(w.project_id)}</td>
+        <td class="mono dim">${esc(w.task_id || "—")}</td>
+        <td class="mono dim">${esc(w.agent_id || "—")}</td>
+        <td class="mono">${esc(w.mode)}</td>
+        <td class="mono dim">${esc(w.branch || "—")}</td>
+        <td><span class="st ${esc(w.status)}">${esc(w.status)}</span></td>
+        <td class="mono dim">${(w.commits||[]).length}</td>
+        <td class="btn-row" style="gap:4px">
+          <button class="btn" onclick="wsAction('status','${esc(w.workspace_id)}')">status</button>
+          <button class="btn" onclick="wsAction('diff','${esc(w.workspace_id)}')">diff</button>
+          ${w.status === "merged" || w.status === "discarded" ? "" : `
+          <button class="btn green" onclick="wsIntegrate('${esc(w.workspace_id)}')">integrate</button>
+          <button class="btn red" onclick="wsDiscard('${esc(w.workspace_id)}')">discard</button>`}
+        </td>
+      </tr>`).join("") + `</tbody></table>`;
+  } catch (err) { $("#workspaces-table").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+}
+
+async function createWorkspace() {
+  const project_id = $("#ws-project").value;
+  if (!project_id) { alert("choose a project"); return; }
+  try {
+    await post("/api/workspaces", {
+      project_id,
+      task_id: $("#ws-task").value || "",
+      agent_id: $("#ws-agent").value || "",
+      repo_path: $("#ws-repo").value || null,
+    });
+    $("#ws-task").value = ""; $("#ws-agent").value = ""; $("#ws-repo").value = "";
+    loadWorkspaces();
+  } catch (e) { alert("isolate failed: " + e.message); }
+}
+
+async function wsAction(what, id) {
+  try {
+    const r = await get("/api/workspaces/" + id + "/" + what);
+    const text = what === "diff" ? (r.diff || "no changes") : JSON.stringify(r, null, 2);
+    alert(text.slice(0, 2000));
+  } catch (e) { alert(what + " failed: " + e.message); }
+}
+
+async function wsIntegrate(id) {
+  if (!confirm("Merge workspace " + id + " back into the shared tree?")) return;
+  try {
+    const r = await post("/api/workspaces/" + id + "/integrate", {message: "integrated from admin UI", operator: "admin-ui"});
+    alert(r.ok ? "integrated (" + (r.commits || []).length + " commits merged)" : "integration failed: " + (r.error || ""));
+    loadWorkspaces();
+  } catch (e) { alert("integrate failed: " + e.message); }
+}
+
+async function wsDiscard(id) {
+  if (!confirm("Discard workspace " + id + "? Its unmerged work will be lost.")) return;
+  try {
+    await post("/api/workspaces/" + id + "/discard", {operator: "admin-ui"});
+    loadWorkspaces();
+  } catch (e) { alert("discard failed: " + e.message); }
 }
 
 // ---------- boot ----------

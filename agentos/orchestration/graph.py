@@ -16,7 +16,6 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agentos.domain.models import ApprovalStatus, ProjectStatus, TaskStatus, WorkflowStage
@@ -301,5 +300,9 @@ def build_graph(engine: Any) -> Any:
 
     graph.add_edge(START, "step")
     graph.add_conditional_edges("step", route)
-    compiled = graph.compile(checkpointer=MemorySaver())
+    # durable checkpoints: paused/interrupted runs survive restarts (the
+    # entity store backs them; Postgres in production, memory in tests)
+    from agentos.orchestration.checkpoints import DurableCheckpointer
+
+    compiled = graph.compile(checkpointer=DurableCheckpointer(engine.svc.entity_store))
     return compiled

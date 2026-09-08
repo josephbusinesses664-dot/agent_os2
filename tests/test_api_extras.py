@@ -65,3 +65,53 @@ async def test_mission_timeline_reconstructs_run(svc):
 
         # unknown project → 404
         assert client.get("/api/projects/nope/timeline").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_ui_renders_security_timeline_workspace_views(svc):
+    """Admin UI ships the new Governance/Observability views and their data
+    endpoints respond (master spec §36: security, mission, workspaces)."""
+    from agentos.api.main import create_app
+
+    app = create_app(svc)
+    with TestClient(app) as client:
+        html = client.get("/static/index.html").text
+        for token in ["view-security", "view-timeline", "view-workspaces",
+                      "loadSecurity", "loadTimeline", "loadWorkspaces",
+                      "Mission Timeline"]:
+            assert token in html, f"admin UI missing {token}"
+
+        policies = client.get("/api/security/policies").json()
+        assert len(policies) >= 4
+        kinds = {p["kind"] for p in policies}
+        assert kinds >= {"deny_tool", "require_approval"}
+
+        em = client.get("/api/security/emergency")
+        assert em.status_code == 200 and em.json()["engaged"] is False
+        # engage → all agents are stopped → disengage
+        engaged = client.post("/api/security/emergency",
+                              json={"operator": "admin-ui", "reason": "test"})
+        assert engaged.json()["engaged"] is True
+        denied = client.get("/api/security/emergency")
+        assert denied.json()["engaged"] is True
+        released = client.delete("/api/security/emergency?operator=admin-ui")
+        assert released.json()["engaged"] is False
+
+        assert client.get("/api/workspaces").json() == []
+        # create a workspace against a real project (plain-dir sandbox is fine)
+        run = await svc.engine.execute_goal("Admin UI workspace target",
+                                            user_id="test", workflow_id="discovery")
+        project = client.get("/api/projects").json()[0]
+        assert project["project_id"] == run["project_id"]
+        created = client.post("/api/workspaces",
+                              json={"project_id": project["project_id"]})
+        assert created.status_code == 200
+        ws = created.json()
+        assert ws["status"] in ("isolated", "working")
+        assert client.get("/api/workspaces").json()[0]["workspace_id"] == ws["workspace_id"]
+        # diff endpoint is reachable; integrating a sandbox without changes is a no-op
+        assert client.get(f"/api/workspaces/{ws['workspace_id']}/status").status_code == 200
+        integ = client.post(f"/api/workspaces/{ws['workspace_id']}/integrate",
+                            json={"message": "admin test"})
+        assert integ.status_code in (200, 409)
+        assert client.get(f"/api/workspaces/{ws['workspace_id']}/status").status_code in (200, 404)

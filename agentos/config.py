@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     # --- Tools --------------------------------------------------------------
     tool_retry_transient: int = 2  # retries for transient tool failures
 
+    # --- Model reliability ---------------------------------------------------
+    model_circuit_threshold: int = 3  # consecutive failures before a model's circuit opens
+    model_circuit_cooldown_seconds: float = 120.0  # how long an open circuit stays open
+
     # --- Operations ---------------------------------------------------------
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

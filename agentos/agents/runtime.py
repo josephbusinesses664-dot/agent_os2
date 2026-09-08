@@ -585,6 +585,8 @@ class AgentRuntime:
                 span.result_summary = (response.content or "")[:200]
                 await span_cm.__aexit__(None, None, None)
             if not response.error:
+                # success closes any open circuit for this model
+                ctx.router.record_success(current)
                 return response
             fallback, reason = await ctx.router.failover(current, response.error)
             if fallback and fallback not in used:

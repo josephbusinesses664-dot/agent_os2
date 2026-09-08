@@ -238,16 +238,50 @@ class OrchestratorEngine:
 
     async def resume(self, run_id: str, approval_decision: str, note: str = "",
                      decided_by: str = "human") -> dict:
-        """Resume a paused run after a human approval decision."""
+        """Resume a paused run after a human approval decision.
+
+        Survives restarts: if the run is not in memory, the latest durable
+        checkpoint is rehydrated from the checkpointer and the workflow is
+        rebuilt from its persisted id."""
         entry = self._active_runs.get(run_id)
         if entry is None:
-            raise KeyError(f"unknown run {run_id}")
+            state = await self._checkpoint_state(run_id)
+            if state is None:
+                raise KeyError(f"unknown run {run_id}")
+            workflow_id = state.get("workflow_id")
+            workflow = await self.svc.workflow_registry.get(workflow_id) \
+                if workflow_id else None
+            if workflow is None:
+                raise KeyError(f"run {run_id}: persisted workflow {workflow_id} not found")
+            self._active_runs[run_id] = {"workflow": workflow, "state": state}
+            entry = self._active_runs[run_id]
         state = dict(entry["state"])
         state["approval_decision"] = approval_decision
         state["approval_note"] = note
         state["status"] = "running"
         final = await self._invoke(run_id, state)
         return final
+
+    async def _checkpoint_state(self, run_id: str) -> Optional[dict]:
+        """Rehydrate the latest durable checkpoint for a run (restart resume)."""
+        try:
+            ckpt = await self.get_graph().checkpointer.aget_tuple(
+                {"configurable": {"thread_id": run_id}})
+        except Exception:  # noqa: BLE001
+            return None
+        if ckpt is None:
+            return None
+        values = ckpt.checkpoint.get("channel_values") or {}
+        return values if isinstance(values, dict) else None
+
+    async def checkpoint_stats(self) -> dict:
+        """How many durable checkpoints exist (observability)."""
+        try:
+            saver = self.get_graph().checkpointer
+            return {"checkpoints": await saver.checkpoint_count(),
+                    "threads": len(await saver.list_threads())}
+        except Exception:  # noqa: BLE001
+            return {"checkpoints": 0, "threads": 0}
 
     async def approve(self, approval_id: str, decision: str, decided_by: str = "human",
                       note: str = "") -> Optional[dict]:

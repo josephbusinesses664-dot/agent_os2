@@ -14,6 +14,7 @@ Decision flow:
 from __future__ import annotations
 
 import re
+import time
 from typing import Optional
 
 from agentos.budgets.manager import BudgetManager
@@ -64,6 +65,54 @@ def complexity_score(text: str) -> int:
     return high * 2 + medium + length_bonus
 
 
+class CircuitBreaker:
+    """Consecutive-failure circuit breaker per model id.
+
+    After `threshold` consecutive failures a model's circuit opens and it is
+    routed around for `cooldown_seconds`; a success closes (resets) the
+    circuit. This is availability state, not a judgment on the model — it
+    exists so one flaky provider cannot stall the whole organization.
+    """
+
+    def __init__(self, threshold: int = 3, cooldown_seconds: float = 120.0) -> None:
+        self.threshold = max(1, threshold)
+        self.cooldown = cooldown_seconds
+        self._failures: dict[str, int] = {}
+        self._open_until: dict[str, float] = {}
+
+    def record_failure(self, model_id: str) -> None:
+        count = self._failures.get(model_id, 0) + 1
+        self._failures[model_id] = count
+        if count >= self.threshold:
+            self._open_until[model_id] = time.monotonic() + self.cooldown
+
+    def record_success(self, model_id: str) -> None:
+        self._failures.pop(model_id, None)
+        self._open_until.pop(model_id, None)
+
+    def is_open(self, model_id: str) -> bool:
+        until = self._open_until.get(model_id)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            # cooldown expired — half-open: allow traffic, a failure re-opens
+            self._open_until.pop(model_id, None)
+            self._failures.pop(model_id, None)
+            return False
+        return True
+
+    def summary(self) -> dict:
+        now = time.monotonic()
+        return {
+            "threshold": self.threshold,
+            "cooldown_seconds": self.cooldown,
+            "open": sorted(
+                m for m, until in self._open_until.items()
+                if now < until),
+            "consecutive_failures": dict(self._failures),
+        }
+
+
 class ModelRouter:
     def __init__(self, settings: Settings, model_registry: ModelRegistry,
                  budgets: BudgetManager, providers: dict,
@@ -73,9 +122,15 @@ class ModelRouter:
         self.budgets = budgets
         self.providers = providers
         self.performance = performance  # PerformanceTracker | None
+        self.breaker = CircuitBreaker(
+            threshold=getattr(settings, "model_circuit_threshold", 3),
+            cooldown_seconds=getattr(settings, "model_circuit_cooldown_seconds", 120.0),
+        )
 
     # -- availability -------------------------------------------------------
     async def _available(self, model_id: str) -> bool:
+        if self.breaker.is_open(model_id):
+            return False
         model = await self.registry.get(model_id)
         if not model or not model.enabled:
             return False
@@ -83,6 +138,9 @@ class ModelRouter:
         if provider is None:
             return False
         return provider.is_configured()
+
+    def record_success(self, model_id: str) -> None:
+        self.breaker.record_success(model_id)
 
     async def pick_for_provider(self, tier: str, excluded: set[str] | None = None) -> Optional[str]:
         models = await self.registry.by_tier(tier)
@@ -188,6 +246,7 @@ class ModelRouter:
 
     async def failover(self, primary: str, error: str) -> tuple[Optional[str], str]:
         """Choose a fallback when `primary` fails. Returns (model_id, reason)."""
+        self.breaker.record_failure(primary)
         model = await self.registry.get(primary)
         if not model:
             return await self.pick_for_provider("t2"), "primary unknown"

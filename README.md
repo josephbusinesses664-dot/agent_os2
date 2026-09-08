@@ -65,14 +65,14 @@ I want to build a new SaaS product.            → executive creates a project
 
 | Subsystem | Where | Notes |
 |---|---|---|
-| Control plane API + admin UI | `agentos/api/`, `agentos/admin/` | FastAPI, single-file SPA, opt-in Bearer auth (`API_AUTH_TOKEN`), mission timeline per project |
-| Orchestration | `agentos/orchestration/` | LangGraph state machine, checkpoints, retries, approval gates |
+| Control plane API + admin UI | `agentos/api/`, `agentos/admin/` | FastAPI, single-file SPA, opt-in Bearer auth (`API_AUTH_TOKEN`), mission timeline per project, admin views for security/emergency, workspaces, mission replay |
+| Orchestration | `agentos/orchestration/` | LangGraph state machine, **durable checkpoints** (entity-store-backed — runs survive restarts, see `orchestration/checkpoints.py`), retries, approval gates |
 | Agent runtime | `agentos/agents/` | observe → plan → act → **verify** → recover loop, inbox-fed context, auto memory, tracing, per-run browser session |
 | Agent registry | `agentos/registries/agent_registry.py` | 41 agents in a hierarchical org chart |
 | Skill registry | `agentos/registries/skill_registry.py` + `skills/` | 100+ skills, 20 branches, progressive loading |
 | Capabilities | `agentos/capabilities/` | skills become executable: tools + hooks + validators + tests (sandboxed inline code) |
 | Dynamic planning | `agentos/planning.py` + `workflows/stage_templates.yaml` | the executive plans required stages per goal; simple requests never run the full pipeline |
-| Model layer | `agentos/models/` | providers (Claude/DeepSeek/GLM/OpenAI-compat/echo), router, failover, **performance-aware routing** |
+| Model layer | `agentos/models/` | providers (Claude/DeepSeek/GLM/OpenAI-compat/echo), router, failover, **performance-aware routing**, **circuit breaker** (consecutive failures open a model's circuit, routed around until cooldown) |
 | Budgets | `agentos/budgets/` | global/project/agent/task limits, auto-downgrade |
 | Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | capability discovery, **default-deny permissions**, strategy-change retries, timeouts, health checks, MCP lifecycle + credential isolation |
 | Hard security policies | `agentos/security/policy.py` + `config/policies.yaml` | **policies always override the hierarchy**: evaluated before agent permissions (deny / forced human approval / scope coercion), emergency stop that refuses every tool call until a human stands down |
@@ -171,7 +171,19 @@ security → performance → final review → deployment (⚠️ human approval)
 
 Every stage is executed by the appropriate agent, artifacts land in the
 project's sandboxed workspace, and everything is visible in Mattermost, the
-admin UI, the event stream and the audit log.
+admin UI, the event stream and the audit log. The admin UI also ships
+**Security** (hard policies + human-only emergency stop), **Mission Timeline**
+(chronological replay of any project's events/tasks/approvals/messages — a
+failed run is reconstructable after the fact) and **Workspaces** (isolate,
+status, diff, integrate, discard) views.
+
+Durability: workflows are checkpointed through the same entity store as the
+rest of the organization (Postgres in production), so a run interrupted by a
+restart resumes from its last checkpoint instead of starting over — see
+`agentos/orchestration/checkpoints.py`. Models are protected by a circuit
+breaker (`agentos/models/router.py`): `MODEL_CIRCUIT_THRESHOLD` consecutive
+failures open a model's circuit and the router routes around it until the
+cooldown expires.
 
 ## Documentation
 
