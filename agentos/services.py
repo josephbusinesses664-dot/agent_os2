@@ -38,7 +38,9 @@ from agentos.registries.skill_registry import SkillRegistry
 from agentos.registries.tool_registry import ToolRegistry
 from agentos.security.approvals import ApprovalService
 from agentos.security.audit import AuditLog
+from agentos.security.policy import PolicyEngine
 from agentos.tasks.service import TaskService
+from agentos.workspaces.manager import WorkspaceManager
 from agentos.tools.executor import ToolExecutor
 from agentos.workflows.loader import WorkflowRegistry
 
@@ -67,6 +69,9 @@ class Services:
     tracer: Tracer = None  # type: ignore[assignment]
     audit: AuditLog = None  # type: ignore[assignment]
     approvals: ApprovalService = None  # type: ignore[assignment]
+    policy: PolicyEngine = None  # type: ignore[assignment]
+    workspaces: WorkspaceManager = None  # type: ignore[assignment]
+    coding: Any = None  # CodingHarness — see agentos.workspaces.harness
     memory: MemoryStore = None  # type: ignore[assignment]
     messages: MessageBus = None  # type: ignore[assignment]
     projects: ProjectService = None  # type: ignore[assignment]
@@ -114,6 +119,16 @@ class Services:
 
         self.audit = AuditLog(self.entity_store)
         self.approvals = ApprovalService(self.entity_store)
+        self.policy = PolicyEngine(
+            self.entity_store,
+            policies_path=self.settings.security_policies_file,
+            environment=self.settings.environment,
+            event_bus=self.events, audit=self.audit,
+        )
+        self.workspaces = WorkspaceManager(
+            self.entity_store, worktrees_root=self.workspace / "worktrees")
+        from agentos.workspaces.harness import LocalCodingHarness
+        self.coding = LocalCodingHarness(self.workspaces)
         self.memory = MemoryStore(self.entity_store,
                                   fact_ttl_days=self.settings.memory_fact_ttl_days)
         from agentos.memory.scoping import ScopedMemoryStore
@@ -188,8 +203,11 @@ class Services:
 
     def runtime(self, agent: Any, task: Any, project: Any,
                 approved_tools: Optional[set[str]] = None,
-                spawn_depth: int = 0) -> AgentRuntime:
-        workspace = self.workspace / (project.project_id if project else "default")
+                spawn_depth: int = 0,
+                workspace_path: Optional[Path] = None) -> AgentRuntime:
+        workspace = (workspace_path
+                     or self.workspace / (project.project_id if project else "default"))
+        workspace = Path(workspace)
         workspace.mkdir(parents=True, exist_ok=True)
         ctx = RuntimeContext(
             agent=agent, task=task, project=project,

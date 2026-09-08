@@ -54,6 +54,23 @@ class McpCredentials(BaseModel):
     token: str
 
 
+class EmergencyEngage(BaseModel):
+    operator: str = "human"
+    reason: str = ""
+
+
+class WorkspaceCreate(BaseModel):
+    project_id: str
+    task_id: str = ""
+    agent_id: str = ""
+    repo_path: Optional[str] = None
+
+
+class IntegrateRequest(BaseModel):
+    message: str = ""
+    operator: str = "human"
+
+
 def create_app(svc: Any) -> FastAPI:
     if svc is not None:
         svc_holder["svc"] = svc
@@ -340,6 +357,72 @@ def create_app(svc: Any) -> FastAPI:
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"approval_id": approval_id, "result": result}
+
+    # -- hard security policies / emergency stop ------------------------------
+    @app.get("/api/security/policies")
+    async def security_policies():
+        svc = S()
+        return [p.model_dump(mode="json") for p in svc.policy.policies()]
+
+    @app.get("/api/security/emergency")
+    async def emergency_status():
+        return (await S().policy.emergency_status()).to_dict()
+
+    @app.post("/api/security/emergency")
+    async def emergency_engage(body: EmergencyEngage):
+        return (await S().policy.engage(body.operator, body.reason)).to_dict()
+
+    @app.delete("/api/security/emergency")
+    async def emergency_disengage(operator: str = "human"):
+        return (await S().policy.disengage(operator)).to_dict()
+
+    # -- isolated engineering workspaces --------------------------------------
+    @app.get("/api/workspaces")
+    async def list_workspaces():
+        return [w.model_dump(mode="json") for w in await S().workspaces.list()]
+
+    @app.post("/api/workspaces")
+    async def create_workspace(body: WorkspaceCreate):
+        record = await S().workspaces.isolate(
+            body.project_id, task_id=body.task_id, agent_id=body.agent_id,
+            repo_path=body.repo_path)
+        return record.model_dump(mode="json")
+
+    @app.get("/api/workspaces/{workspace_id}")
+    async def get_workspace(workspace_id: str):
+        record = await S().workspaces.get(workspace_id)
+        if not record:
+            raise HTTPException(404, "workspace not found")
+        return record.model_dump(mode="json")
+
+    @app.get("/api/workspaces/{workspace_id}/status")
+    async def workspace_status(workspace_id: str):
+        try:
+            return await S().workspaces.status(workspace_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.get("/api/workspaces/{workspace_id}/diff")
+    async def workspace_diff(workspace_id: str):
+        try:
+            return {"diff": await S().workspaces.diff(workspace_id)}
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/workspaces/{workspace_id}/integrate")
+    async def integrate_workspace(workspace_id: str, body: IntegrateRequest):
+        try:
+            return await S().workspaces.integrate(workspace_id, message=body.message,
+                                                  operator=body.operator)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post("/api/workspaces/{workspace_id}/discard")
+    async def discard_workspace(workspace_id: str, body: IntegrateRequest):
+        try:
+            return await S().workspaces.discard(workspace_id, operator=body.operator)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     # -- memory / messages --------------------------------------------------
     @app.get("/api/memory")

@@ -526,6 +526,83 @@ class MemoryLink(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Hard security policies (immutable — always above the hierarchy)
+# ---------------------------------------------------------------------------
+
+class PolicyKind(str, Enum):
+    """What a hard security policy does when it matches a tool call.
+
+    deny_tool         → the call is refused outright, even for executives
+    require_approval  → the call needs human approval regardless of the
+                        agent's permissions or risk level
+    restrict_scope    → the call is allowed but coerced into a narrower
+                        permission scope (e.g. shell → read-only)
+    """
+
+    DENY_TOOL = "deny_tool"
+    REQUIRE_APPROVAL = "require_approval"
+    RESTRICT_SCOPE = "restrict_scope"
+
+
+class SecurityPolicy(BaseModel):
+    """A declarative, immutable rule evaluated on EVERY tool call BEFORE the
+    agent's own permissions. Empty match lists mean "all". The org chart
+    grants authority; policies bound it — a senior agent cannot override a
+    matching policy, because enforcement happens above the hierarchy (the
+    executor checks policies first)."""
+
+    id: str
+    kind: PolicyKind
+    description: str = ""
+    tools: list[str] = Field(default_factory=list)       # empty = all tools
+    agents: list[str] = Field(default_factory=list)      # empty = all agents
+    roles: list[str] = Field(default_factory=list)       # empty = all roles
+    environments: list[str] = Field(default_factory=list)  # empty = all environments
+    arg_pattern: str = ""  # regex on serialized args; only matches when found
+    reason: str = ""       # shown to the agent / audit log when the policy fires
+    immutable: bool = True
+    enabled: bool = True
+    approval_risk: str = "high"  # require_approval: risk level of the approval
+    scope: str = ""              # restrict_scope: the coerced permission scope
+
+
+# ---------------------------------------------------------------------------
+# Workspaces (isolated engineering worktrees)
+# ---------------------------------------------------------------------------
+
+class WorkspaceStatus(str, Enum):
+    ISOLATED = "isolated"
+    WORKING = "working"
+    MERGED = "merged"
+    DISCARDED = "discarded"
+    FAILED = "failed"
+
+
+class WorkspaceRecord(BaseModel):
+    """One isolated engineering workspace (git worktree, or a plain sandbox
+    directory when the project has no repository). Agents work here without
+    touching the shared tree; integrate() merges the work back."""
+
+    workspace_id: str = Field(default_factory=lambda: new_id("ws"))
+    project_id: str
+    task_id: str = ""
+    agent_id: str = ""
+    repo_path: str = ""       # base repository ("" = no repository)
+    worktree_path: str = ""   # the isolated working directory
+    branch: str = ""          # the worktree branch (worktree mode)
+    base_branch: str = ""     # branch the worktree was cut from
+    mode: str = "worktree"    # worktree | plain
+    status: WorkspaceStatus = WorkspaceStatus.ISOLATED
+    commits: list[str] = Field(default_factory=list)  # hashes made in the workspace
+    note: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    def touch(self) -> None:
+        self.updated_at = utcnow()
+
+
+# ---------------------------------------------------------------------------
 # Approvals
 # ---------------------------------------------------------------------------
 

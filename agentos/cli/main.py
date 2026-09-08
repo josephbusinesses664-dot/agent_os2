@@ -480,6 +480,133 @@ def approvals(action: str = typer.Argument(..., help="list | approve | reject"),
 
 
 @app.command()
+def policy(action: str = typer.Argument(..., help="list | evaluate"),
+           agent_id: Optional[str] = typer.Option(None, "--agent"),
+           tool: Optional[str] = typer.Option(None, "--tool"),
+           args_json: Optional[str] = typer.Option(None, "--args"),
+           env: Optional[str] = typer.Option(None, "--env")):
+    """Hard security policies — the rules that override the hierarchy
+    (list | evaluate)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            rows = svc.policy.policies()
+            typer.echo(f"{'ID':<30} {'KIND':<18} {'TOOLS':<20} {'ENVS':<13} ENABLED DESCRIPTION")
+            typer.echo("-" * 120)
+            for p in rows:
+                typer.echo(f"{p.id:<30} {p.kind.value:<18} "
+                           f"{','.join(p.tools) or 'all':<20} "
+                           f"{','.join(p.environments) or 'all':<13} "
+                           f"{str(p.enabled):<7} {p.description[:48]}")
+            return
+        if action == "evaluate":
+            import json as _json
+
+            agent = await svc.agent_registry.get(agent_id or "")
+            if not agent:
+                typer.echo(f"agent {agent_id} not found")
+                return
+            args = _json.loads(args_json or "{}")
+            decision = await svc.policy.evaluate(agent, tool or "", args,
+                                                 environment=env or svc.settings.environment)
+            typer.echo(f"tool={tool} agent={agent.id} env={env or svc.settings.environment}")
+            typer.echo(f"  allowed: {decision.allowed}")
+            typer.echo(f"  action:  {decision.action}")
+            if decision.policy_id:
+                typer.echo(f"  policy:  {decision.policy_id}")
+            if decision.reason:
+                typer.echo(f"  reason:  {decision.reason}")
+            if decision.scope:
+                typer.echo(f"  scope:   {decision.scope}")
+
+    _run(_main())
+
+
+@app.command()
+def emergency(action: str = typer.Argument(..., help="status | engage | disengage"),
+              reason: Optional[str] = typer.Option(None, "--reason"),
+              operator: str = typer.Option("cli", "--operator")):
+    """The human-controlled emergency stop: engaged, EVERY tool call is
+    refused until a human disengages (status | engage | disengage)."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "status":
+            state = await svc.policy.emergency_status()
+            if state.engaged:
+                typer.echo(f"🚨 ENGAGED by {state.operator}: {state.reason or 'no reason given'}"
+                           f" ({state.engaged_at})")
+            else:
+                typer.echo("Green — no emergency stop engaged.")
+            return
+        if action == "engage":
+            state = await svc.policy.engage(operator, reason or "")
+            typer.echo(f"🚨 EMERGENCY STOP ENGAGED by {operator}."
+                       f" All tool execution is refused. Use "
+                       f"`agent-os emergency disengage` to stand down.")
+            return state
+        if action == "disengage":
+            state = await svc.policy.disengage(operator)
+            typer.echo(f"✅ Emergency stop disengaged by {operator}. Tool execution resumed.")
+            return state
+        typer.echo("usage: agent-os emergency status|engage|disengage")
+
+    _run(_main())
+
+
+@app.command()
+def workspace(action: str = typer.Argument(..., help="list | show | isolate | status | diff | integrate | discard"),
+              workspace_id: Optional[str] = typer.Argument(None),
+              project_id: Optional[str] = typer.Option(None, "--project"),
+              task_id: Optional[str] = typer.Option(None, "--task"),
+              agent_id: Optional[str] = typer.Option(None, "--agent"),
+              repo: Optional[str] = typer.Option(None, "--repo")):
+    """Isolated engineering workspaces (git worktrees).
+    Actions: list | show | isolate | status | diff | integrate | discard."""
+    async def _main():
+        svc = await _load_svc()
+        if action == "list":
+            rows = await svc.workspaces.list()
+            typer.echo(f"{'ID':<16} {'STATUS':<10} {'MODE':<8} {'AGENT':<22} TASK")
+            typer.echo("-" * 90)
+            for w in rows:
+                typer.echo(f"{w.workspace_id:<16} {w.status.value:<10} {w.mode:<8} "
+                           f"{w.agent_id:<22} {w.task_id}")
+            return
+        if action == "isolate":
+            record = await svc.workspaces.isolate(
+                project_id or "", task_id=task_id or "", agent_id=agent_id or "",
+                repo_path=repo)
+            typer.echo(f"Isolated {record.workspace_id} ({record.mode}) at "
+                       f"{record.worktree_path}")
+            return
+        if action == "show":
+            record = await svc.workspaces.get(workspace_id or "")
+            if not record:
+                typer.echo("not found")
+                return
+            typer.echo(json.dumps(record.model_dump(mode="json"), indent=2, default=str))
+            return
+        if action == "status":
+            typer.echo(json.dumps(await svc.workspaces.status(workspace_id or ""),
+                                  indent=2, default=str))
+            return
+        if action == "diff":
+            typer.echo(await svc.workspaces.diff(workspace_id or "") or "(no diff)")
+            return
+        if action == "integrate":
+            result = await svc.workspaces.integrate(workspace_id or "")
+            typer.echo(json.dumps(result, indent=2, default=str))
+            return
+        if action == "discard":
+            result = await svc.workspaces.discard(workspace_id or "")
+            typer.echo(json.dumps(result, indent=2, default=str))
+            return
+        typer.echo("usage: agent-os workspace list|show|isolate|status|diff|integrate|discard")
+
+    _run(_main())
+
+
+@app.command()
 def memory(limit: int = typer.Option(30, "--limit")):
     """List persisted memory entries."""
     async def _main():

@@ -31,6 +31,7 @@ from agentos.domain.models import (
     TraceSpan,
     UsageRecord,
     WorkflowDef,
+    WorkspaceRecord,
 )
 
 from .base import Repository
@@ -63,6 +64,7 @@ KEY_FIELDS: dict[type, tuple[str, ...]] = {
     PerformanceStats: ("agent_id", "window"),
     WorkflowDef: ("workflow_id",),
     Budget: ("scope", "scope_id"),
+    WorkspaceRecord: ("workspace_id",),
 }
 
 

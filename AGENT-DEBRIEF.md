@@ -4,6 +4,29 @@ Compiled from every agent post, handoff, reflection and report in the Mattermost
 workspace (1255 posts across all channels) after the day's pipeline runs.
 This is the handoff document for the next fixing session.
 
+## Status — fixed in the 2026-09-07 build-out session
+
+- **B (tool aliases)**: fixed — aliases (`project_state`, `repo_tree`,
+  `arch.tree`, `git_status`, …) resolve to the real tools, and unknown tools
+  reply with the closest real name. Tests: `tests/test_debrief_fixes.py`.
+- **G (cross-run state confusion)**: fixed — agent inboxes are scoped to the
+  current task's project.
+- **GO/NO-GO gate defaults GO when tooling fails**: fixed — the gate now
+  sees the research stage that just finished, falls back through the router
+  when the preferred model's provider is unconfigured, and FAILS CLOSED
+  (NO-GO) when the model is unreachable or evidence is absent.
+- **H (artifacts not written)**: fixed — planned stage artifacts are
+  guaranteed on disk; stub files (<200 bytes) are replaced with the agent's
+  real output.
+- **I (duplicate/parallel stage executions)**: fixed — the worker skips
+  queued tasks that are already running/queued/completed.
+- **A (web.scrape on Reddit)**: fixed — reddit.com URLs are fetched through
+  the old.reddit JSON endpoint (real titles + selftext).
+
+Still environment-bound (operational, not code): live verification of the
+DDG search fallbacks from the box, freeing a Render slot (25-service cap),
+and a clean full run with API-only monitoring.
+
 ## 1. Problem clusters (ranked by how often agents hit them)
 
 ### A. Research tools: registered-but-broken (BLOCKER #1)

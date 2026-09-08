@@ -200,9 +200,15 @@ class AgentRuntime:
 
         inbox_ctx = "No pending messages."
         try:
-            messages = await ctx.services.messages.inbox(self.agent.id, unread_only=True, limit=8)
-            relevant = [m for m in messages if m.message_type.value in (
-                "task_request", "handoff", "status_update", "challenge", "decision", "question")]
+            # per-project scope: an agent working project A must never see
+            # handoffs from a sibling project B (cross-run state confusion)
+            messages = await ctx.services.messages.inbox(self.agent.id,
+                                                         unread_only=True, limit=40)
+            relevant = [m for m in messages
+                        if m.message_type.value in (
+                            "task_request", "handoff", "status_update",
+                            "challenge", "decision", "question")
+                        and m.project_id in (None, task.project_id)][-8:]
             if relevant:
                 lines = []
                 for m in relevant:

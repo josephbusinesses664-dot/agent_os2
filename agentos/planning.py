@@ -27,6 +27,16 @@ import yaml
 from agentos.domain.models import WorkflowDef, WorkflowStage
 
 _MARKER_RE = re.compile(r"PLANNED_STAGES\s*:\s*\[([^\]]*)\]", re.IGNORECASE)
+# artifact path inside a stage template's PLANNED_TOOL_CALLS filesystem.write
+_ARTIFACT_RE = re.compile(r'"path"\s*:\s*"([^"]+)"', re.IGNORECASE)
+
+
+def _template_artifact(description: str) -> str:
+    """Extract the planned artifact path (e.g. artifacts/research.md) from a
+    stage template's description. The engine guarantees this file lands on
+    disk after the stage, even when the model never issues the write."""
+    m = _ARTIFACT_RE.search(description or "")
+    return m.group(1).strip() if m else ""
 
 # keyword → stage ids. Order matters: more specific first.
 _KEYWORD_STAGES: list[tuple[tuple[str, ...], list[str]]] = [
@@ -118,6 +128,7 @@ class DynamicPlanner:
                 agent_role=tpl["agent_role"],
                 description=tpl.get("description", ""),
                 requires_approval=bool(tpl.get("requires_approval", False)),
+                artifact_prefix=_template_artifact(tpl.get("description", "")),
             ))
         for i, stage in enumerate(built):
             if i + 1 < len(built):

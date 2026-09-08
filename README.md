@@ -75,6 +75,8 @@ I want to build a new SaaS product.            → executive creates a project
 | Model layer | `agentos/models/` | providers (Claude/DeepSeek/GLM/OpenAI-compat/echo), router, failover, **performance-aware routing** |
 | Budgets | `agentos/budgets/` | global/project/agent/task limits, auto-downgrade |
 | Tools + MCP | `agentos/tools/`, `agentos/registries/mcp_registry.py` | capability discovery, **default-deny permissions**, strategy-change retries, timeouts, health checks, MCP lifecycle + credential isolation |
+| Hard security policies | `agentos/security/policy.py` + `config/policies.yaml` | **policies always override the hierarchy**: evaluated before agent permissions (deny / forced human approval / scope coercion), emergency stop that refuses every tool call until a human stands down |
+| Isolated workspaces | `agentos/workspaces/` | per-task **git worktrees** for parallel engineering: isolate → work → integrate (merge back) → discard, plus a coding-harness interface for future runtimes |
 | Browser | `agentos/integrations/browser.py` | Playwright-powered automation (open/snapshot/click/type/evaluate/screenshot) through the executor + permission system |
 | Adapters | `agentos/tools/builtin.py` | read-only GitHub, Postgres, Docker adapters (technically enforced, approval-gated) |
 | Memory | `agentos/memory/` | layered memory (task/project/agent/org/user) with TF-IDF semantic recall, **knowledge-graph links**, **contradiction resolution**, versioned + temporal facts, provenance, consolidation |
@@ -103,6 +105,12 @@ agent-os mcp list | register
 agent-os apis list
 agent-os workflows list | run
 agent-os approvals list | approve | reject
+agent-os policy list | evaluate     # hard security policies (above the hierarchy)
+agent-os emergency status | engage | disengage   # human-only global stop
+agent-os workspace list | isolate | integrate | discard   # isolated worktrees
+agent-os policy list | evaluate     # hard security policies (above the hierarchy)
+agent-os emergency status | engage | disengage   # human-only global stop
+agent-os workspace list | isolate | integrate | discard   # isolated worktrees
 agent-os events | audit | memory
 agent-os evaluate basic       # benchmark a regression dataset
 agent-os leaderboard          # agent performance leaderboard
@@ -114,6 +122,28 @@ agent-os analyze [goal]       # failure analysis + who-does-this-best
 agent-os ask "your goal"      # executive flow
 agent-os demo                 # offline end-to-end demo
 ```
+
+## Live-run reliability fixes (AGENT-DEBRIEF.md → code)
+
+Fixes from the Mattermost run debrief are now in the platform:
+
+- **Tool aliases + closest-match errors** — models that guess
+  `project_state` / `repo_tree` / `arch.tree` / `git_status` get the real
+  tool; unknown tools reply `did you mean …?` so the next call works.
+- **Fail-closed executive GO/NO-GO gate** — the gate now reviews the
+  research stage that *just finished* (it previously read stale state), and
+  returns NO-GO instead of blindly GO when the executive model is
+  unreachable or research produced no evidence.
+- **Guaranteed stage artifacts** — every stage template's planned
+  deliverable (`artifacts/*.md`) lands on disk even when the model never
+  issues the write; stub files are replaced with the real output.
+- **Per-project agent inboxes** — an agent working project A never sees
+  handoffs from sibling project B (no cross-run state confusion).
+- **Worker duplicate-task guard** — queued tasks that are already
+  running/queued/completed are skipped, so worker loops cannot resurrect or
+  duplicate stage executions.
+- **Reddit scraping via old.reddit JSON** — `web.scrape` on reddit.com
+  returns real post text instead of the JS-rendered shell.
 
 ## Dynamic planning
 
@@ -157,6 +187,8 @@ admin UI, the event stream and the audit log.
 - [MODELS.md](docs/MODELS.md) — tiers, routing, failover, cost control
 - [MATTERMOST.md](docs/MATTERMOST.md) — wiring the human interface
 - [SECURITY.md](docs/SECURITY.md) — permissions, approvals, audit
+- [SECURITY-POLICIES.md](docs/SECURITY-POLICIES.md) — hard policies that override the hierarchy, emergency stop
+- [WORKSPACES.md](docs/WORKSPACES.md) — isolated git-worktree engineering workspaces
 - [WORKFLOWS.md](docs/WORKFLOWS.md) — declarative workflows and gates
 - [OBSERVABILITY.md](docs/OBSERVABILITY.md) — events, logs, budgets
 - [ADMIN-UI.md](docs/ADMIN-UI.md) — the web console

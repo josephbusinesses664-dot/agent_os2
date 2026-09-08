@@ -46,7 +46,10 @@ async def _executive_gate(engine: Any, state: dict, project: Any) -> tuple[str, 
     """Alex reviews the research phase and decides GO (build) or NO-GO (report).
 
     The department heads bring the evidence; the executive makes the call —
-    the human is not asked. Defaults to GO if the model is unreachable."""
+    the human is not asked. Fail-closed: if the model is unreachable OR the
+    research produced no evidence (tooling failed), the executive does NOT
+    commit the organization to building — it stops before build and the
+    failure is surfaced instead of being papered over."""
     from agentos.agents.hierarchy import ORG_AGENTS
     from agentos.domain.models import ModelRequest
 
@@ -59,13 +62,31 @@ async def _executive_gate(engine: Any, state: dict, project: Any) -> tuple[str, 
     body = "\n\n".join(evidence) or "(no stage outputs)"
     goal = getattr(project, "objective", "") or ""
     executive = ORG_AGENTS.get("executive")
+    # prefer deepseek-pro; if it is registered but its provider is not
+    # actually configured (no keys), fall back through the router instead of
+    # silently running the gate with nothing — the gate must never default to
+    # GO merely because tooling was missing.
     model_def = await svc.model_registry.get("deepseek-pro")
     model_id = "deepseek-pro"
-    if (model_def is None or not model_def.enabled) and executive is not None:
+    provider = None
+    if model_def is not None and model_def.enabled:
+        provider = svc.providers.get(model_def.provider)
+    if provider is None and executive is not None:
         model_id, _reason = await svc.router.route(executive, None, description=goal)
         model_def = await svc.model_registry.get(model_id) if model_id else None
-    provider = svc.providers.get(model_def.provider) if model_def else None
+        provider = svc.providers.get(model_def.provider) if model_def else None
     verdict, rationale = "go", ""
+    # fail-closed: no research evidence (tooling failed or stages produced
+    # nothing) means the executive cannot honestly commit to building
+    if not evidence:
+        verdict, rationale = "nogo", ("research produced no evidence (tooling or "
+                                       "stage failures) — not committing to build "
+                                       "without it")
+        await svc.events.publish(
+            "executive.gate_fail_closed",
+            {"reason": "no research evidence — gate defaulted to NO-GO"},
+            project_id=project.project_id, source="executive", severity="warning")
+        return verdict, rationale
     if provider is not None:
         try:
             req = ModelRequest(
@@ -90,7 +111,14 @@ async def _executive_gate(engine: Any, state: dict, project: Any) -> tuple[str, 
             if len(lines) > 1:
                 rationale = " ".join(lines[1:])
         except Exception as exc:  # noqa: BLE001
-            logger.warning("executive gate call failed: %s — defaulting to GO", exc)
+            # fail-closed: an unreachable executive is not a reason to build
+            verdict, rationale = "nogo", (f"executive gate call failed ({exc}) — "
+                                           "not committing to build on a failure")
+            logger.warning("executive gate call failed: %s — defaulting to NO-GO", exc)
+            await svc.events.publish(
+                "executive.gate_fail_closed",
+                {"reason": f"executive model unreachable: {exc}"},
+                project_id=project.project_id, source="executive", severity="warning")
     mm = getattr(svc, "mattermost", None)
     if mm is not None and mm.available:
         line = ("🧭 **Alex's decision after research: "
@@ -231,6 +259,9 @@ async def step(engine: Any, state: dict) -> dict:
     next_stage = stage.get("next")
     if next_stage:
         if _gate_due(stage_id, next_stage, state):
+            # the gate reviews the research phase — it must SEE the stage
+            # that just finished, or it decides on stale/empty evidence
+            state["stage_results"] = results
             verdict, rationale = await _executive_gate(engine, state, project)
             state["exec_gate"] = {"verdict": verdict, "rationale": rationale}
             if verdict == "nogo":

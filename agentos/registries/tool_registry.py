@@ -14,6 +14,58 @@ from agentos.tools.builtin import HANDLERS, load_builtin_defs
 
 ToolHandler = Callable[[object, dict], Awaitable[dict]]
 
+# Models hallucinate tool names; these aliases map the names agents actually
+# emit (often the dot-sanitized schema name, e.g. project_state) onto the real
+# tool. Resolution happens in get()/handler() so every pathway benefits.
+ALIASES: dict[str, str] = {
+    # dot-sanitized schema names (DeepSeek rejects dots)
+    "project_state": "project.state",
+    "repo_tree": "repo.tree",
+    "repo_search": "repo.search",
+    "filesystem_read": "filesystem.read",
+    "filesystem_write": "filesystem.write",
+    "file_read": "filesystem.read",
+    "file_write": "filesystem.write",
+    "memory_recall": "memory.recall",
+    "memory_save": "memory.save",
+    "web_search": "web.search",
+    "web_scrape": "web.scrape",
+    "mcp_call": "mcp.call",
+    "mcp_select": "mcp.select",
+    "api_call": "api.call",
+    "deploy_github": "deploy.github",
+    "render_manage": "render.manage",
+    "postgres_query": "postgres.query",
+    "db_query": "db.query",
+    "agent_delegate": "agent.delegate",
+    "agent_challenge": "agent.challenge",
+    "agent_resolve": "agent.resolve",
+    "browser_open": "browser.open",
+    "browser_snapshot": "browser.snapshot",
+    "browser_click": "browser.click",
+    "browser_type": "browser.type",
+    "browser_evaluate": "browser.evaluate",
+    "browser_screenshot": "browser.screenshot",
+    "browser_close": "browser.close",
+    "tool_discover": "tool.discover",
+    "tool_health": "tool.health",
+    "mattermost_post": "mattermost.post",
+    "hn_search": "hn.search",
+    "reddit_search": "reddit.search",
+    # architecture-style guesses from live runs
+    "arch.tree": "repo.tree",
+    "arch.explore": "repo.tree",
+    "arch": "repo.tree",
+    "git_status": "git.status",
+    "git": "git.status",
+    # (git.log / git.branch / git.diff are commands OF git.status, not tools;
+    # the executor's closest-match hint steers models there)
+}
+
+
+def resolve_alias(name: str) -> str:
+    return ALIASES.get(name, name)
+
 
 class ToolRegistry:
     def __init__(self, store: EntityStore) -> None:
@@ -36,7 +88,7 @@ class ToolRegistry:
         return [t for t in tools if t.enabled or not enabled_only]
 
     async def get(self, name: str) -> Optional[ToolDef]:
-        return await self.store.get(self._collection, name, ToolDef)
+        return await self.store.get(self._collection, resolve_alias(name), ToolDef)
 
     async def register(self, tool: ToolDef, handler: Optional[ToolHandler] = None,
                        health_check: Optional[ToolHandler] = None) -> ToolDef:
@@ -48,7 +100,7 @@ class ToolRegistry:
         return tool
 
     def handler(self, name: str) -> Optional[ToolHandler]:
-        return self._handlers.get(name)
+        return self._handlers.get(resolve_alias(name))
 
     async def set_enabled(self, name: str, enabled: bool) -> ToolDef:
         tool = await self.get(name)
@@ -118,3 +170,6 @@ class ToolRegistry:
     async def categories(self) -> list[str]:
         tools = await self.list()
         return sorted({t.category for t in tools})
+
+    def aliases(self) -> dict[str, str]:
+        return dict(ALIASES)

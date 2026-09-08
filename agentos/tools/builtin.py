@@ -677,13 +677,44 @@ async def _h_reddit_search(ctx: Any, args: dict) -> dict:
 
 
 async def _h_web_scrape(ctx: Any, args: dict) -> dict:
-    """Fetch a URL and return its visible text (network tool, permission-gated)."""
+    """Fetch a URL and return its visible text (network tool, permission-gated).
+
+    Reddit pages are JS-rendered (a plain GET returns the literal word
+    "Reddit"), so reddit.com URLs are fetched through the old.reddit JSON
+    endpoint instead — real post titles and selftext.
+    """
     import httpx
 
     url = args["url"]
     if not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "url must be http(s)"}
     try:
+        if "reddit.com" in url:
+            json_url = url.replace("www.reddit.com", "old.reddit.com") \
+                .replace("reddit.com", "old.reddit.com") \
+                .rstrip("/") + ".json"
+            async with httpx.AsyncClient(timeout=25, follow_redirects=True,
+                                         headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                                                 "Chrome/125.0 Safari/537.36"}) as client:
+                resp = await client.get(json_url)
+                resp.raise_for_status()
+                data = resp.json()
+            children = data.get("data", {}).get("children", [])
+            parts = []
+            for child in children[:20]:
+                d = child.get("data", {})
+                title = d.get("title")
+                body = (d.get("selftext") or "").strip()
+                if title:
+                    parts.append(title)
+                if body:
+                    parts.append(body)
+            text = "\n\n".join(parts)
+            if not text:
+                return {"ok": False, "error": "reddit JSON returned no content"}
+            return {"ok": True, "url": url, "status": resp.status_code,
+                    "text": text[:12_000], "truncated": len(text) > 12_000}
         async with httpx.AsyncClient(timeout=25, follow_redirects=True,
                                      headers={"User-Agent": "agent-os/0.1"}) as client:
             resp = await client.get(url)

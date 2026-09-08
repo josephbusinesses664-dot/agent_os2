@@ -87,13 +87,51 @@ class ToolExecutor:
     async def execute(self, ctx: Any, agent: Any, tool_name: str, args: dict) -> dict:
         tool = await self.tools.get(tool_name)
         if tool is None or not tool.enabled:
-            return {"ok": False, "error": f"unknown or disabled tool: {tool_name}"}
+            # help the model recover: suggest the closest real tool so the
+            # next call is likely to work instead of being a dead end
+            hint = ""
+            try:
+                import difflib
+
+                names = [t.name for t in await self.tools.list(enabled_only=True)]
+                close = difflib.get_close_matches(tool_name, names, n=1, cutoff=0.45)
+                if close:
+                    hint = f" — did you mean `{close[0]}`?"
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "error": f"unknown or disabled tool: {tool_name}{hint}"}
+
+        # 0. HARD SECURITY POLICIES — evaluated BEFORE the agent's own
+        #    permissions, so they always override the hierarchy. A matching
+        #    deny blocks even an executive; require_approval forces the human
+        #    gate regardless of risk level; restrict_scope coerces the call
+        #    into a narrower permission scope. Emergency stop refuses all.
+        policy = getattr(ctx, "services", None) and getattr(ctx.services, "policy", None)
+        environment = (getattr(ctx.services, "settings", None)
+                       and getattr(ctx.services.settings, "environment", "development")) \
+            if ctx.services is not None else "development"
+        policy_decision = await policy.evaluate(agent, tool_name, args,
+                                                environment=environment) \
+            if policy is not None else None
+        policy_scope: Optional[str] = None
+        if policy_decision is not None and not policy_decision.allowed:
+            action = "tool.emergency_blocked" if policy_decision.action == "emergency" \
+                else "tool.denied"
+            await self._audit(ctx, agent, tool_name, action, "denied",
+                              {"reason": policy_decision.reason,
+                               "policy_id": policy_decision.policy_id})
+            return {"ok": False, "error": policy_decision.reason}
+        if policy_decision is not None and policy_decision.action == "restrict_scope":
+            policy_scope = policy_decision.scope
 
         # 1. permission policy (allow | deny | allow:scope); explicit entries
-        #    win, otherwise high-risk tools default to deny (least privilege)
+        #    win, otherwise high-risk tools default to deny (least privilege).
+        #    A hard policy may coerce the scope (e.g. shell -> read-only).
         permission_key = tool.permission_key or tool.name
         allowed = agent.permissions.get(
             permission_key, "deny" if permission_key in _DEFAULT_DENY else "allow")
+        if policy_scope:
+            allowed = f"allow:{policy_scope}"
         if allowed == "deny":
             await self._audit(ctx, agent, tool_name, "tool.denied", "denied",
                               {"reason": "permission policy"})
@@ -104,16 +142,26 @@ class ToolExecutor:
                               {"reason": "read-only shell scope"})
             return {"ok": False, "error": "shell write command denied (read-only scope)"}
 
-        # 2. approval gate for high-risk tools
-        if tool.risk_level == self.require_approval_risk and tool.risk_level == "high":
+        # 2. approval gate for high-risk tools (and hard-policy-forced
+        #    approvals — a require_approval policy holds even when the tool
+        #    itself is low risk and the agent holds the permission)
+        requires_approval = (tool.risk_level == self.require_approval_risk
+                             and tool.risk_level == "high")
+        forced_approval = None
+        if policy_decision is not None and policy_decision.action == "require_approval":
+            requires_approval = True
+            forced_approval = policy_decision
+        if requires_approval:
             granted = await self._tool_approved(ctx, tool_name)
             if not granted:
                 approval = await self.approvals.request(
                     agent.id, agent.name, f"tool:{tool_name}",
                     task_id=ctx.task.task_id if ctx.task else None,
                     project_id=ctx.project.project_id if ctx.project else None,
-                    risk_level="high",
-                    reason=f"{agent.name} wants to call {tool_name} with args {json.dumps(redact_args(args))[:300]}",
+                    risk_level=forced_approval.approval_risk if forced_approval else "high",
+                    reason=(f"{agent.name} wants to call {tool_name} with args "
+                            f"{json.dumps(redact_args(args))[:300]}"
+                            + (f" — {forced_approval.reason}" if forced_approval else "")),
                 )
                 await self._audit(ctx, agent, tool_name, "tool.approval_requested", "pending",
                                   {"approval_id": approval.approval_id})

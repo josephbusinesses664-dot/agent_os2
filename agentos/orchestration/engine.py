@@ -399,6 +399,25 @@ class OrchestratorEngine:
             except Exception:  # noqa: BLE001
                 logger.exception("stage report mirror failed")
 
+        # guaranteed artifacts: the stage template declares its deliverable
+        # (e.g. artifacts/research.md); if the model never wrote it (or left a
+        # stub), the agent's actual output is persisted as the artifact so the
+        # run always ships the planned files. Never overwrites real work.
+        if stage.artifact_prefix:
+            try:
+                artifact_target = (self.svc.workspace / project.project_id /
+                                   stage.artifact_prefix)
+                stub = (not artifact_target.exists()
+                        or artifact_target.stat().st_size < 200)
+                if stub and (outcome.content or "").strip():
+                    artifact_target.parent.mkdir(parents=True, exist_ok=True)
+                    artifact_target.write_text(outcome.content)
+                    name = stage.artifact_prefix.split("/")[-1]
+                    if name not in outcome.artifacts:
+                        outcome.artifacts.append(name)
+            except Exception:  # noqa: BLE001
+                logger.exception("guaranteed artifact write failed for %s",
+                                 stage.artifact_prefix)
         # persist artifacts against the task + project
         for artifact in outcome.artifacts:
             await self.svc.tasks.record_artifact(task.task_id, artifact)
@@ -631,6 +650,15 @@ class OrchestratorEngine:
                 continue
             task_id = item.get("task_id")
             if not task_id:
+                continue
+            # duplicate/parallel-execution guard: a task that is already being
+            # worked, already queued for work, or already finished must never
+            # run again (worker loops can resurrect queued tasks otherwise)
+            task = await self.svc.tasks.get(task_id)
+            if task and task.status in (TaskStatus.QUEUED, TaskStatus.RUNNING,
+                                        TaskStatus.COMPLETED):
+                logger.info("skipping duplicate queued task %s (status %s)",
+                            task_id, task.status.value)
                 continue
             try:
                 await self.run_single_task(task_id)

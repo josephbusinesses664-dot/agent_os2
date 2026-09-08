@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     # --- Security -----------------------------------------------------------
     require_approval_risk: str = "high"  # low | medium | high
     admin_user_ids: str = ""  # comma-separated Mattermost user ids with override power
+    security_policies_file: str = "./config/policies.yaml"  # extra hard policies
+    workspace_worktrees_dir: str = "./workspace/worktrees"  # isolated engineering workspaces
 
     # --- Memory -------------------------------------------------------------
     memory_fact_ttl_days: int = 30  # consolidation: archive stale facts after this

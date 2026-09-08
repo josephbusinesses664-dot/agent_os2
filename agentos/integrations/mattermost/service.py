@@ -365,6 +365,31 @@ class MattermostService:
                 await svc.approvals.decide(arg, "rejected", "human")
                 await self.post_to("approvals", f"❌ Rejected `{arg}`.")
                 await engine.approve(arg, "rejected", decided_by="human")
+        elif command in ("emergency", "stand-down"):
+            if command == "emergency":
+                reason = " ".join(parts[2:]) if len(parts) > 2 else ""
+                state = await svc.policy.engage("human", reason)
+                await self.post_to(
+                    "security",
+                    f"🚨 **EMERGENCY STOP ENGAGED** by a human operator."
+                    f" All tool execution is refused."
+                    + (f"\nReason: {reason}" if reason else "")
+                    + f"\nStand down with `@agent stand-down`.")
+                await self.post_to("announcements",
+                                   f"🚨 Emergency stop engaged ({reason or 'no reason given'}).")
+            else:
+                state = await svc.policy.disengage("human")
+                await self.post_to("security",
+                                   "✅ **EMERGENCY STOP DISENGAGED** by a human operator."
+                                   " Tool execution resumed.")
+        elif command == "policies":
+            rows = svc.policy.policies()
+            lines = ["**HARD SECURITY POLICIES** (override the hierarchy)"]
+            for p in rows:
+                lines.append(f"- `{p.id}` [{p.kind.value}] "
+                             f"tools={','.join(p.tools) or 'all'} "
+                             f"env={','.join(p.environments) or 'all'}")
+            await self.post_to("security", "\n".join(lines))
         elif command == "retry":
             await self.post_to("executive", f"Retry requested for `{arg}` — re-queued.")
             if arg and self.on_command:
@@ -373,7 +398,9 @@ class MattermostService:
             await self.post_to("executive",
                                "I can explain: `@agent status`, `@agent stop <agent>`, "
                                "`@agent resume <agent>`, `@agent approve <id>`, "
-                               "`@agent reject <id>`, `@agent retry <task>`. "
+                               "`@agent reject <id>`, `@agent retry <task>`, "
+                               "`@agent emergency <reason>` (halt all tools), "
+                               "`@agent stand-down` (resume), `@agent policies`. "
                                "Or just tell me a goal in general.")
         else:
             await self.post_to("executive", f"Unknown command `{command}`. Try `@agent explain`.")
