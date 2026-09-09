@@ -147,6 +147,8 @@ def create_app(svc: Any) -> FastAPI:
             "tasks": len(await svc.tasks.list()),
             "approvals_pending": len(await svc.approvals.pending()),
             "budget_spent_month": round(sum(b.get("spent_month", 0) for b in budgets), 4),
+            "schedules": len(await svc.scheduler.list()),
+            "schedules_enabled": len(await svc.scheduler.list(enabled_only=True)),
             "mattermost": bool(svc.mattermost and svc.mattermost.available),
         }
 

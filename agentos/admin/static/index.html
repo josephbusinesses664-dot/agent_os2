@@ -184,6 +184,7 @@
   <a href="#tasks" data-view="tasks">Tasks</a>
   <a href="#projects" data-view="projects">Projects</a>
   <a href="#workspaces" data-view="workspaces">Workspaces</a>
+  <a href="#schedules" data-view="schedules">Standing Missions</a>
   <div class="section">Capabilities</div>
   <a href="#skills" data-view="skills">Skills</a>
   <a href="#models" data-view="models">Models</a>
@@ -340,6 +341,21 @@
     <div class="feed" id="timeline-feed" style="max-height:70vh"></div>
   </section>
 
+  <!-- STANDING MISSIONS (schedules) -->
+  <section class="view" id="view-schedules">
+    <div class="card">
+      <div class="sub" style="margin:0 0 8px">Recurring / standing missions fire on an interval through the durable workflow engine. Auto-disable at <code>max_runs</code>; missed task deadlines escalate to the agent's manager.</div>
+      <div class="btn-row" style="flex-wrap:wrap">
+        <input type="text" id="sched-name" placeholder="name" style="width:130px">
+        <input type="text" id="sched-goal" placeholder="goal (objective executed each fire)" style="flex:1;min-width:240px">
+        <input type="number" id="sched-interval" value="86400" style="width:100px" title="interval seconds">
+        <input type="number" id="sched-max" placeholder="max_runs (optional)" style="width:110px">
+        <button class="btn" onclick="createSchedule()">Create</button>
+      </div>
+    </div>
+    <div class="table-wrap" id="schedules-table"></div>
+  </section>
+
   <!-- WORKSPACES (isolated worktrees) -->
   <section class="view" id="view-workspaces">
     <div class="card">
@@ -363,7 +379,7 @@ const time = ts => { try { return new Date(ts).toLocaleString(); } catch { retur
 const money = n => "$" + Number(n || 0).toFixed(4);
 
 let API = "";
-let VIEWS = ["overview","health","agents","tasks","projects","workspaces","skills","models","mcp","budget","control","approvals","security","timeline","events","audit"];
+let VIEWS = ["overview","health","agents","tasks","projects","workspaces","schedules","skills","models","mcp","budget","control","approvals","security","timeline","events","audit"];
 
 function showView(name) {
   document.querySelectorAll("section.view").forEach(s => s.classList.remove("active"));
@@ -379,7 +395,7 @@ window.addEventListener("hashchange", () => {
 
 function loadView(name) {
   ({overview: loadOverview, health: loadHealth, agents: loadAgents, tasks: loadTasks,
-    projects: loadProjects, workspaces: loadWorkspaces, skills: loadSkills, models: loadModels, mcp: loadMcp,
+    projects: loadProjects, workspaces: loadWorkspaces, schedules: loadSchedules, skills: loadSkills, models: loadModels, mcp: loadMcp,
     budget: loadBudget, control: loadControl, approvals: loadApprovals, security: loadSecurity,
     timeline: loadTimeline, events: loadEvents, audit: loadAudit})[name]?.();
 }
@@ -402,6 +418,7 @@ async function loadOverview() {
       ["Projects", status.projects, status.workflows + " workflows"],
       ["Skills", status.skills, status.tools + " tools"],
       ["Models", status.models, status.mcp + " MCP servers"],
+      ["Standing missions", status.schedules, status.schedules_enabled + " enabled"],
       ["Spend (month)", money(status.budget_spent_month), "global budget"],
     ].map(([l,v,h]) => `<div class="card stat"><div class="label">${l}</div>
       <div class="value">${v}</div><div class="hint">${h}</div></div>`).join("");
@@ -744,6 +761,71 @@ async function loadTimeline() {
           <span class="msg dim">${esc(JSON.stringify(i.detail || {}).slice(0,90))}</span>
         </div>`).join("");
   } catch (err) { $("#timeline-feed").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+}
+
+// ---------- standing missions (schedules) ----------
+async function loadSchedules() {
+  try {
+    const rows = await get("/api/schedules");
+    $("#schedules-table").innerHTML = rows.length === 0 ? `<div class="empty">no standing missions — create one above</div>` :
+      `<table><thead><tr><th>Name</th><th>Goal</th><th>Interval</th><th>Next run</th><th>Runs</th>
+       <th>Status</th><th>Last run</th><th>Actions</th></tr></thead><tbody>` +
+      rows.map(s => `<tr>
+        <td>${esc(s.name)}<div class="mono dim">${esc(s.schedule_id)}</div></td>
+        <td class="msg">${esc(s.goal.slice(0, 80))}</td>
+        <td class="mono">${Number(s.interval_seconds)/60 >= 60 ? (Number(s.interval_seconds)/3600).toFixed(1)+"h" : (Number(s.interval_seconds)/60).toFixed(0)+"m"}</td>
+        <td class="mono dim">${time(s.next_run_at)}</td>
+        <td class="mono">${s.run_count}${s.max_runs ? "/" + s.max_runs : ""}</td>
+        <td><span class="st ${esc(s.enabled ? (s.last_status||"pending") : "paused")}">${esc(s.enabled ? (s.last_status||"pending") : "paused")}</span></td>
+        <td class="mono dim">${s.last_run_at ? time(s.last_run_at) : "—"}</td>
+        <td class="btn-row" style="gap:4px">
+          <button class="btn" onclick="schedRun('${esc(s.schedule_id)}')">run now</button>
+          ${s.enabled
+            ? `<button class="btn" onclick="schedToggle('${esc(s.schedule_id)}', false)">pause</button>`
+            : `<button class="btn green" onclick="schedToggle('${esc(s.schedule_id)}', true)">resume</button>`}
+          <button class="btn red" onclick="schedDelete('${esc(s.schedule_id)}')">delete</button>
+        </td>
+      </tr>`).join("") + `</tbody></table>`;
+  } catch (err) { $("#schedules-table").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+}
+
+async function createSchedule() {
+  const name = $("#sched-name").value.trim();
+  const goal = $("#sched-goal").value.trim();
+  if (!name || !goal) { alert("name and goal required"); return; }
+  try {
+    const body = {name, goal, interval_seconds: Number($("#sched-interval").value) || 86400};
+    const max = Number($("#sched-max").value);
+    if (max > 0) body.max_runs = max;
+    await post("/api/schedules", body);
+    $("#sched-goal").value = ""; $("#sched-max").value = "";
+    loadSchedules();
+  } catch (err) { alert("create failed: " + err.message); }
+}
+
+async function schedRun(id) {
+  try { await post(`/api/schedules/${encodeURIComponent(id)}/run`, {}); loadSchedules(); }
+  catch (err) { alert("run failed: " + err.message); }
+}
+
+async function schedToggle(id, enabled) {
+  try {
+    const r = await fetch(API + "/api/schedules/" + encodeURIComponent(id), {
+      method: "PATCH", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({enabled}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    loadSchedules();
+  } catch (err) { alert("toggle failed: " + err.message); }
+}
+
+async function schedDelete(id) {
+  if (!confirm("delete this standing mission?")) return;
+  try {
+    const r = await fetch(API + "/api/schedules/" + encodeURIComponent(id), {method: "DELETE"});
+    if (!r.ok) throw new Error(r.status);
+    loadSchedules();
+  } catch (err) { alert("delete failed: " + err.message); }
 }
 
 // ---------- workspaces (isolated worktrees) ----------

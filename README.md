@@ -82,7 +82,7 @@ I want to build a new SaaS product.            → executive creates a project
 | Memory | `agentos/memory/` | layered memory (task/project/agent/org/user) with TF-IDF semantic recall, **knowledge-graph links**, **contradiction resolution**, versioned + temporal facts, provenance, consolidation |
 | Messaging | `agentos/messaging/` | structured agent-to-agent messages: handoffs, blockers, challenges, escalation |
 | Performance | `agentos/performance.py` | operational stats that shape routing and delegation; **downstream-success tracking** (not cosmetic XP) |
-| Evaluation | `agentos/evaluation/` + `eval_sets/` | deterministic + LLM-judge scoring, regression datasets, benchmark runner, leaderboards, **failure analysis → recommendations**, capability comparison |
+| Evaluation | `agentos/evaluation/` + `eval_sets/` | deterministic + LLM-judge scoring, regression datasets (incl. `churchapp` — the 9-stage Autonomous Company Benchmark), benchmark runner, leaderboards, **failure analysis → recommendations**, capability comparison |
 | Tracing | `agentos/observability/trace.py` | span chains agent → stage → model → tool → evaluator |
 | Projects & tasks | `agentos/projects/`, `agentos/tasks/` | dependency graphs, auto-unblocking |
 | Security | `agentos/security/` | permissions, scopes, approvals, audit log, secret redaction |
@@ -111,6 +111,7 @@ agent-os workspace list | isolate | integrate | discard   # isolated worktrees
 agent-os schedule list | create | pause | resume | run   # recurring/standing missions
 agent-os events | audit | memory
 agent-os evaluate basic       # benchmark a regression dataset
+agent-os evaluate churchapp   # Autonomous Company Benchmark (9-stage ChurchApp mission)
 agent-os leaderboard          # agent performance leaderboard
 agent-os traces [task_id]     # span chain for a task
 agent-os consolidate          # memory consolidation

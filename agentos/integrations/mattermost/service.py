@@ -32,6 +32,7 @@ CHANNEL_LAYOUT: dict[str, str] = {
     "agent-logs": "Agent task results and reports",
     "agent-discussion": "Inter-agent discussion feed",
     "system-errors": "Errors, retries and failures",
+    "operations": "Scheduled / standing mission activity",
     "monitoring": "Health and monitoring",
     "security": "Security events",
     "deployments": "Deployment activity",
@@ -65,6 +66,13 @@ EVENT_CHANNEL: dict[str, str] = {
     "budget.warning": "executive",
     "workflow.completed": "announcements",
     "project.created": "announcements",
+    "schedule.created": "operations",
+    "schedule.fired": "operations",
+    "schedule.failed": "system-errors",
+    "schedule.paused": "operations",
+    "schedule.enabled": "operations",
+    "schedule.deleted": "operations",
+    "task.deadline_exceeded": "system-errors",
 }
 
 
@@ -274,6 +282,26 @@ class MattermostService:
             return "✅ Deployment completed"
         if event.type == "deployment.failed":
             return "🔴 Deployment failed"
+        if event.type == "schedule.created":
+            return (f"🗓️ Standing mission created: {payload.get('name', '?')} "
+                    f"every {payload.get('interval_seconds', '?')}s "
+                    f"(id {payload.get('schedule_id', '?')})")
+        if event.type == "schedule.fired":
+            return (f"⏰ Standing mission fired: run {payload.get('run_count', '?')} "
+                    f"(id {payload.get('schedule_id', '?')})")
+        if event.type == "schedule.failed":
+            return (f"🔴 Standing mission fire failed "
+                    f"(id {payload.get('schedule_id', '?')}): "
+                    f"{payload.get('error', '')[:200]}")
+        if event.type == "schedule.paused":
+            return f"⏸️ Standing mission paused (id {payload.get('schedule_id', '?')})"
+        if event.type == "schedule.enabled":
+            return f"▶️ Standing mission enabled (id {payload.get('schedule_id', '?')})"
+        if event.type == "schedule.deleted":
+            return f"🗑️ Standing mission deleted (id {payload.get('schedule_id', '?')})"
+        if event.type == "task.deadline_exceeded":
+            return (f"⏳ Task missed its deadline and was escalated "
+                    f"(id {payload.get('task_id', '?')}, due {payload.get('deadline', '?')})")
         return ""
 
     # -- human control ------------------------------------------------------
