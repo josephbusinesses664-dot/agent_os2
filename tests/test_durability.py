@@ -71,21 +71,21 @@ def test_circuit_breaker_opens_and_closes():
     from agentos.models.router import CircuitBreaker
 
     cb = CircuitBreaker(threshold=3, cooldown_seconds=60)
-    assert not cb.is_open("deepseek-pro")
-    cb.record_failure("deepseek-pro")
-    cb.record_failure("deepseek-pro")
-    assert not cb.is_open("deepseek-pro")
-    cb.record_failure("deepseek-pro")
-    assert cb.is_open("deepseek-pro")
-    assert "deepseek-pro" in cb.summary()["open"]
+    assert not cb.is_open("model-x")
+    cb.record_failure("model-x")
+    cb.record_failure("model-x")
+    assert not cb.is_open("model-x")
+    cb.record_failure("model-x")
+    assert cb.is_open("model-x")
+    assert "model-x" in cb.summary()["open"]
 
     # unrelated models are unaffected
     assert not cb.is_open("gpt-5")
 
     # a success closes the circuit immediately
-    cb.record_success("deepseek-pro")
-    assert not cb.is_open("deepseek-pro")
-    assert "deepseek-pro" not in cb.summary()["open"]
+    cb.record_success("model-x")
+    assert not cb.is_open("model-x")
+    assert "model-x" not in cb.summary()["open"]
 
 
 def test_circuit_breaker_cooldown_recovers():
