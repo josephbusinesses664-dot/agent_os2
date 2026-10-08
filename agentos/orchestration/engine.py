@@ -198,12 +198,9 @@ class OrchestratorEngine:
             if director is None:
                 continue
             try:
-                model_def = await self.svc.model_registry.get("deepseek-pro")
-                model_id = "deepseek-pro"
-                if model_def is None or not model_def.enabled:
-                    model_id, _reason = await self.svc.router.route(
-                        director, None, description=goal)
-                    model_def = await self.svc.model_registry.get(model_id) if model_id else None
+                model_id, _reason = await self.svc.router.route(
+                    director, None, description=goal)
+                model_def = await self.svc.model_registry.get(model_id) if model_id else None
                 provider = self.svc.providers.get(model_def.provider) if model_def else None
                 if provider is None:
                     continue

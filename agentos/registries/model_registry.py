@@ -100,7 +100,4 @@ class ModelRegistry:
 
     def fallback_chain(self, model: ModelDef) -> list[str]:
         chain = list(model.fallbacks)
-        # deterministic safety net: if a tier-3 has no fallbacks, default to t2
-        if not chain:
-            chain = ["deepseek-pro"]
         return chain

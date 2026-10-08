@@ -94,16 +94,16 @@ async def test_router_cheap_for_routine(svc):
                 description="Classify and summarize 10 short texts.")
     model_id, reason = await svc.router.route(agent, task)
     assert model_id is not None
-    assert "tier t1" in reason
+    assert "tier t2" in reason
 
 
 @pytest.mark.asyncio
 async def test_router_failover_chain(svc):
     # echo is the only configured provider; failover must degrade gracefully
-    model, reason = await svc.router.failover("deepseek-pro", "boom: provider outage")
-    # emergency fallback lands on the offline echo provider rather than dying
+    model, reason = await svc.router.failover("nonexistent-model", "boom: provider outage")
+    # primary unknown fallback lands on a t2 model (which is echo in tests)
     assert model == "echo"
-    assert "emergency" in reason
+    assert "primary unknown" in reason
 
 
 @pytest.mark.asyncio

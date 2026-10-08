@@ -64,15 +64,8 @@ def _agent(
         "browser.close": "deny",
     }
     perms.update(extra_permissions or {})
-    # execs (executive office + department directors) think with deepseek-pro;
-    # every specialist below them works on deepseek-flash
-    # deliverable-heavy + evidence-critical stages need pro's output depth;
-    # flash caps at ~1-2K words and kept failing the substantive-output gate
-    _PRO_IDS = {"frontend-lead", "backend-lead", "research-director",
-                "market-researcher", "community-researcher", "competitor-analyst",
-                "technical-researcher", "product-researcher", "requirements-analyst"}
-    preferred = ("deepseek-pro" if agent_id in _EXEC_IDS or agent_id in _PRO_IDS
-                 else "deepseek-flash")
+
+
     return AgentDef(
         id=agent_id,
         name=name,
@@ -82,7 +75,7 @@ def _agent(
         allowed_children=children,
         skills=skills,
         tools=tools,
-        model_policy={"tier": tier, "preferred_models": [preferred], "max_tier": "t3"},
+        model_policy={"tier": tier, "preferred_models": [], "max_tier": "t3"},
         permissions=perms,
         risk_level=risk,
         mcp_servers=mcp_servers or [],
@@ -143,7 +136,7 @@ def build_org() -> list[AgentDef]:
             "product-director", [],
             ["requirements-analysis", "acceptance-criteria"],
             ["memory.recall", "project.state"],
-            "t1",
+            "t2",
         ),
         _agent(
             "product-researcher", "Product Researcher", "Product research",
@@ -151,7 +144,7 @@ def build_org() -> list[AgentDef]:
             "product-director", [],
             ["market-research", "competitor-analysis", "demand-validation"],
             ["web.search", "web.scrape", "hn.search", "reddit.search", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"web.scrape": "allow"},
         ),
         # --- Engineering ---------------------------------------------------
@@ -206,7 +199,7 @@ def build_org() -> list[AgentDef]:
             "cto", [],
             ["database-design", "data-modeling"],
             ["filesystem.read", "memory.recall", "mcp.call"],
-            "t1",
+            "t2",
             mcp_servers=["context7"],
             extra_permissions={"postgres.query": "allow", "mcp.call": "allow"},
         ),
@@ -288,7 +281,7 @@ def build_org() -> list[AgentDef]:
             "research-director", [],
             ["market-research", "demand-validation", "opportunity-scoring"],
             ["web.search", "web.scrape", "hn.search", "reddit.search", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"web.scrape": "allow"},
         ),
         _agent(
@@ -309,7 +302,7 @@ def build_org() -> list[AgentDef]:
             "research-director", [],
             ["competitor-analysis", "positioning", "moat-analysis"],
             ["web.search", "memory.recall"],
-            "t1",
+            "t2",
         ),
         _agent(
             "technical-researcher", "Technical Researcher", "Technical research",
@@ -317,7 +310,7 @@ def build_org() -> list[AgentDef]:
             "research-director", [],
             ["technical-research", "api-evaluation"],
             ["web.search", "web.scrape", "hn.search", "reddit.search", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"web.scrape": "allow",
                               "browser.open": "allow", "browser.snapshot": "allow",
                               "browser.close": "allow"},
@@ -337,7 +330,7 @@ def build_org() -> list[AgentDef]:
             "marketing-director", [],
             ["seo", "content-strategy", "web-seo-jsonld"],
             ["web.search", "filesystem.read", "memory.recall"],
-            "t1",
+            "t2",
         ),
         _agent(
             "content-agent", "Content Agent", "Content",
@@ -345,7 +338,7 @@ def build_org() -> list[AgentDef]:
             "marketing-director", [],
             ["copywriting", "landing-page-design", "content-strategy"],
             ["filesystem.read", "filesystem.write", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"filesystem.write": "allow"},
         ),
         _agent(
@@ -354,7 +347,7 @@ def build_org() -> list[AgentDef]:
             "marketing-director", [],
             ["social-content", "audience-research"],
             ["web.search", "memory.recall"],
-            "t1",
+            "t2",
         ),
         _agent(
             "growth-agent", "Growth Agent", "Growth",
@@ -362,7 +355,7 @@ def build_org() -> list[AgentDef]:
             "marketing-director", [],
             ["conversion-optimization", "growth-strategy"],
             ["web.search", "memory.recall"],
-            "t1",
+            "t2",
         ),
         # --- Sales ---------------------------------------------------------
         _agent(
@@ -379,7 +372,7 @@ def build_org() -> list[AgentDef]:
             "sales-director", [],
             ["lead-research", "prospect-analysis"],
             ["web.search", "web.scrape", "api.call", "hn.search", "reddit.search", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"web.scrape": "allow"},
         ),
         _agent(
@@ -388,7 +381,7 @@ def build_org() -> list[AgentDef]:
             "sales-director", [],
             ["sales-analysis", "sales-strategy"],
             ["memory.recall"],
-            "t1",
+            "t2",
         ),
         _agent(
             "outreach-specialist", "Outreach Specialist", "Outreach",
@@ -396,7 +389,7 @@ def build_org() -> list[AgentDef]:
             "sales-director", [],
             ["outreach-drafting"],
             ["filesystem.read", "filesystem.write", "memory.recall"],
-            "t1", "medium",
+            "t2", "medium",
             extra_permissions={"filesystem.write": "allow"},
         ),
         # --- QA ------------------------------------------------------------
@@ -415,7 +408,7 @@ def build_org() -> list[AgentDef]:
             "qa-director", [],
             ["testing", "test-automation", "e2e-testing", "ui-qa"],
             ["filesystem.read", "filesystem.write", "shell", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"filesystem.write": "allow", "shell": "allow",
                               "browser.open": "allow", "browser.snapshot": "allow",
                               "browser.click": "allow", "browser.type": "allow",
@@ -444,7 +437,7 @@ def build_org() -> list[AgentDef]:
             "qa-director", [],
             ["performance-review"],
             ["filesystem.read", "memory.recall"],
-            "t1",
+            "t2",
         ),
         # --- Operations ----------------------------------------------------
         _agent(
@@ -472,7 +465,7 @@ def build_org() -> list[AgentDef]:
             "operations-director", [],
             ["documentation"],
             ["filesystem.read", "filesystem.write", "memory.recall"],
-            "t1",
+            "t2",
             extra_permissions={"filesystem.write": "allow"},
         ),
         _agent(
@@ -490,7 +483,7 @@ def build_org() -> list[AgentDef]:
             "operations-director", [],
             ["monitoring", "incident-response"],
             ["shell", "memory.recall", "mattermost.post"],
-            "t1", "medium",
+            "t2", "medium",
             extra_permissions={"shell": "allow", "docker": "allow"},
         ),
     ]

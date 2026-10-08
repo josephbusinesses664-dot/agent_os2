@@ -61,19 +61,9 @@ async def _executive_gate(engine: Any, state: dict, project: Any) -> tuple[str, 
     body = "\n\n".join(evidence) or "(no stage outputs)"
     goal = getattr(project, "objective", "") or ""
     executive = ORG_AGENTS.get("executive")
-    # prefer deepseek-pro; if it is registered but its provider is not
-    # actually configured (no keys), fall back through the router instead of
-    # silently running the gate with nothing — the gate must never default to
-    # GO merely because tooling was missing.
-    model_def = await svc.model_registry.get("deepseek-pro")
-    model_id = "deepseek-pro"
-    provider = None
-    if model_def is not None and model_def.enabled:
-        provider = svc.providers.get(model_def.provider)
-    if provider is None and executive is not None:
-        model_id, _reason = await svc.router.route(executive, None, description=goal)
-        model_def = await svc.model_registry.get(model_id) if model_id else None
-        provider = svc.providers.get(model_def.provider) if model_def else None
+    model_id, _reason = await svc.router.route(executive, None, description=goal) if executive else (None, "")
+    model_def = await svc.model_registry.get(model_id) if model_id else None
+    provider = svc.providers.get(model_def.provider) if model_def else None
     verdict, rationale = "go", ""
     # fail-closed: no research evidence (tooling failed or stages produced
     # nothing) means the executive cannot honestly commit to building

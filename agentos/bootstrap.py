@@ -196,12 +196,9 @@ async def _executive_respond(svc: Services, message: dict) -> None:
     executive = ORG_AGENTS.get("executive")
     if executive is None:
         return
-    model_def = await svc.model_registry.get("deepseek-pro")
-    model_id = "deepseek-pro"
-    if model_def is None or not model_def.enabled:
-        model_id, _reason = await svc.router.route(
-            executive, None, description=text, project_id=None)
-        model_def = await svc.model_registry.get(model_id) if model_id else None
+    model_id, _reason = await svc.router.route(
+        executive, None, description=text, project_id=None)
+    model_def = await svc.model_registry.get(model_id) if model_id else None
     provider = svc.providers.get(model_def.provider) if model_def else None
     channel = svc.mattermost._logical_for(message.get("channel", ""))
     if provider is None:
